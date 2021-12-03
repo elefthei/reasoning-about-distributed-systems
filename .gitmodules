@@ -1,0 +1,3 @@
+[submodule "coq-lens"]
+	path = coq-lens
+	url = git@github.com:bedrocksystems/coq-lens.git

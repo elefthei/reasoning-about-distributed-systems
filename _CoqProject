@@ -1,0 +1,5 @@
+-Q . RDS
+-Q coq-lens/theories Lens
+
+coq-lens/theories/Lens.v
+coq-lens/theories/TC/TC.v
