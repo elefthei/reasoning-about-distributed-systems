@@ -7,58 +7,57 @@ From ExtLib Require Import
      Structures.Maps
      Data.Map.FMapAList
      Core.RelDec
-     Data.Nat.
+     Data.Nat
+     Structures.Monad
+     Structures.MonadLaws.
 
 Import ListNotations.
 
-Set Implicit Arguments.
+Module Mixed.
+  Variable uid : Set.
+  Variable var : Set.
 
-Module ETL.
-  Definition agent := nat.
-  Definition var := nat.
+  Parameter eqdec_var: RelDec (@eq var).
+  Parameter eqdec_uid: RelDec (@eq uid).
+
+  Global Existing Instance eqdec_var.
+  Global Existing Instance eqdec_uid.
+
+  (** Time is represented as a nat *)
+  Definition time := nat.
   
-  (* Variable valuation *)
-  Notation heap := (alist (agent * var) nat).
+  (** State is a history of heaps *)
+  Definition heap := var -> nat.
+  Definition history := uid -> time -> heap.
+
+  (** Assume a map from uid * time * var -> nat that acts as a finite map *)
+  Parameter history_map: Map (uid * time * var) nat history.
+  Global Existing Instance history_map.
 
   #[refine]
-  Instance key_reldec: RelDec (@eq (agent * var)) := {}.
-  intros [a1 v1] [a2 v2]; exact (andb (a1 =? a2) (v1 =? v2)).
+  Global Instance key_reldec: RelDec (@eq (uid * time * var)) := {}.
+  intros [[u1 t1] v1] [[u2 t2] v2].
+  exact (andb (andb (rel_dec u1 u2) (t1 =? t2)) (rel_dec v1 v2)).
   Defined.
 
-  Global Instance alist_map: Map (agent * var) nat heap := @Map_alist (agent * var) (@eq (agent *var)) _ nat.
-
-  Notation state := (alist (agent * var) nat).
-  
-  Record state := {
-      id: agent;
-      heap: 
-    }.
-      
-  Inductive prop: agent -> Type :=
-  | PTrue: forall a, prop a
-  | PVar: forall a, var -> a -> prop a
-  | PImp: forall a, prop a -> prop a -> prop a
-  | K: nat -> prop -> prop
-  | Next: forall 
-End ETL.
-Module Mixed.
-  Definition var := nat.
   Inductive loop_outcome(acc: Type) :=
   | Done (a : acc)
   | Again (a : acc).
-  
-  Inductive cmd : Set -> Type :=
-  | Return {result : Set} (r : result) : cmd result
-  | Bind {A B} (c1 : cmd A) (c2 : A -> cmd B) : cmd B
-  | Read (a : var) : cmd var
-  | Write (a v : var) : cmd unit
-  | Loop {acc : Set} (init : acc)
-         (body : acc -> cmd (loop_outcome acc)) : cmd acc.
 
+  (** cmd [list of teachers] [list of students] T *)
+  Inductive cmd : list uid -> list uid -> Type -> Type :=
+  | Return {A: Set} (r : A) : cmd [] [] A
+  | Bind {A B} {i1 i2 o1 o2} (c1 : cmd i1 o1 A)
+         (c2 : A -> cmd i2 o2 B): cmd (i1 ++ i2) (o1 ++ o2) B
+  | Recv {i o} (a : var)(from: uid): cmd (from :: i) o var
+  | Send {i o} {A: Set} (r: A) (to: uid) : cmd i (to::o) unit
+  | Loop {i o} {acc : Set} (init : acc)
+         (body : acc -> cmd i o (loop_outcome acc)) : cmd i o acc.
+ 
   Notation "x <- c1 ; c2" := (Bind c1 (fun x => c2)) (right associativity, at level 80).
   Notation "'for' x := i 'loop' c1 'done'" := (Loop i (fun x => c1)) (right associativity, at level 80).
-  
-  Inductive step : forall {A}, heap * cmd A -> heap * cmd A -> Prop :=
+
+  Inductive step : forall {A i o}, uid * time * history * cmd i o A -> heap * cmd A -> Prop :=
   | StepBindRecur : forall result result'
                       (c1 c1' : cmd result')
                       (c2 : result' -> cmd result) h h',
@@ -68,12 +67,11 @@ Module Mixed.
                         (v : result')
                         (c2 : result' -> cmd result) h,
     step (h, Bind (Return v) c2) (h, c2 v)
-
   | StepLoop : forall (acc : Set) (init : acc) (body : acc -> cmd (loop_outcome acc)) h,
     step (h, Loop init body) (h, o <- body init; match o with
                                                  | Done a => Return a
                                                  | Again a => Loop a body
-                                                 end)
+                                                 end).
 
   | StepRead : forall h a v,
     h $? a = Some v
