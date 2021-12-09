@@ -15,7 +15,7 @@ Section with_state.
   CoInductive stream : Type :=
   | Continue : ST -> stream -> stream.
 
-  Notation "a ':::' ts" := (Continue a ts) (at level 70, right associativity).
+  
   Definition hd (tr : stream) : ST :=
     match tr with
     | Continue hd _ => hd

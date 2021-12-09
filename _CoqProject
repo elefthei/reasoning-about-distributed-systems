@@ -1,5 +1,6 @@
 -Q . RDS
 -Q coq-lens/theories Lens
+-Q charge-core/src/ChargeCore ChargeCore
 
 coq-lens/theories/Lens.v
 coq-lens/theories/TC/TC.v
