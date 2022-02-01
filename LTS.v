@@ -21,7 +21,7 @@ From ChargeCore Require Import
 Section ETL.
 
   Variables (uid: Set) (atom: Set) (heap: Set).
-
+ 
   (* Facts we learn and by whom  we learned them *)
   Inductive fact : Set :=
   | Ret: atom -> fact
@@ -113,12 +113,6 @@ Section ETL.
   (* Transitive-reflexive closure of step *)
   Notation "a '==>*' b" := (step ^* a b) (at level 40).
 
-  (**************** Run the system ***************)
-  Inductive Run: system -> Prop :=
-    DoRun: forall s s', init_system s ->
-           s ==>* s' ->
-           Run s'.
-  
   (***************** Logic ********************)
   Definition systemProp := (system -> Prop).
   Definition traceProp := (trace -> Prop).
@@ -126,10 +120,16 @@ Section ETL.
   Definition atomProp := (atom -> Prop).
   Definition factProp := (fact -> Prop).
 
-  (***************** Lifting ******************)
-  Definition reflect(P: systemProp): Prop :=
+  (**************** Run the system ***************)
+  Inductive Run: system -> Prop :=
+    DoRun: forall s s', init_system s ->
+           s ==>* s' ->
+           Run s'.
+
+  Definition check(P: systemProp): Prop :=
     forall s, Run s -> P s.
   
+  (***************** Lifting ******************)
   Definition trace2system(P: traceProp): systemProp :=
     fun s => List.Forall P s.
 
@@ -145,7 +145,6 @@ Section ETL.
   Inductive atom2fact(P: atomProp): factProp :=
     RetValid: forall a, P a -> atom2fact P (Ret a).
 
-  Arguments reflect /.
   Coercion system2trace: systemProp >-> traceProp.
   Coercion trace2system: traceProp >-> systemProp.
   Coercion state2trace: stateProp >-> traceProp.
@@ -162,15 +161,12 @@ Section ETL.
     fun s =>
       P (List.filter (fun str =>
                         List.existsb (rel_dec (user (hd str))) users) s).
-  Arguments restrict /.
   
   Definition noone(P: traceProp): systemProp :=
     fun s => List.Forall (fun x => ~ (P x)) s.
-  Arguments noone /.
 
   Definition someone(P: traceProp): systemProp :=
     fun s => List.Exists P s.
-  Arguments someone /.
   
   Declare Custom Entry etl.
   Declare Scope etl_scope.
@@ -263,7 +259,7 @@ Section ETL.
   Definition once_until (P Q : traceProp) : traceProp :=
     leads_to_via P P Q.
 
-  (****************************** Epistemic Knowledge operators ***********************)
+  (************************** Epistemic Knowledge operators ***********************)
   Fixpoint powerset{T}(l: list T): list (list T) :=
     match l with
     | nil => [nil]
@@ -272,23 +268,28 @@ Section ETL.
       ps ++ List.map (fun ss => x :: ss) ps
     end.
 
-  Definition is_rumor(f: fact): bool :=
-     match f with
-     | Says _  _ => true
-     | Ret _ => false
-     end.
-
   Fixpoint trust(f: fact): atom :=
      match f with
      | Says _ f => trust f
      | Ret a => a
      end.
-  
-  Definition rumors(l: list fact): list fact :=    
-    List.filter is_rumor l.
+
+  Definition split_rumors(l: list fact): (list atom * list atom) :=
+    let rumors := List.fold_left (fun acc i =>
+                                    match i with
+                                    | Says _ f => trust f :: acc
+                                    | Ret a => acc
+                                    end) l nil in
+    let truths := List.fold_left (fun acc i =>
+                                    match i with
+                                    | Says _ f => acc
+                                    | Ret a => a :: acc
+                                    end) l nil in
+    (rumors, truths).
 
   Definition possible_worlds(db: list fact): list (list atom) :=
-    List.map (fun l => List.map trust l) (powerset db).
+    let (rums, atoms) := split_rumors db in
+    List.map (fun l => l ++ atoms) (powerset rums).
 
   Definition over_db(st: state)(d: list atom): state :=
     match st with
@@ -319,10 +320,11 @@ Section ETL.
   Local Open Scope etl_scope.
 
   Variable phi: atomProp.
-  Check <{ _ |- {} False }>.
-  Check <{ * |- [] K[*] phi }>.
   
-  Theorem foo: reflect <{ _ |- {} False }>.
+  Check <{ _ |- {} False }>.
+  Check <{ * |- [] K[*] phi /\ True }>.
+
+  Theorem foo: check <{ _ |- {} False }>.
   Proof.
     cbv.
     intros sys HR.

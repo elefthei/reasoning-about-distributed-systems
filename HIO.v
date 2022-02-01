@@ -18,10 +18,6 @@ Set Printing Projections.
 (* ================================================================= *)
 (** ** Hoare with message-passing *)
 Module Type Hio.
-
-  Variant tag: Set :=
-    | UUID
-    | NAT.
   
   Parameter var: Set.
   Parameter uuid: Set.
