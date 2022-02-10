@@ -1,70 +1,85 @@
 From Coq Require Import
      List
      Lia
+     Relations
      Arith.Arith.
 
 From ExtLib Require Import
-     Structures.Maps
-     Data.Map.FMapAList
      Core.RelDec
+     Data.HList
+     Structures.Sets
+     Data.Set.ListSet
      Data.Nat.
 
-From RDS Require Import HIO.
-From RDS Require Import Relations.
-
-Require Import Coq.Lists.List.
+From RDS Require Import Mixed.
 
 Set Implicit Arguments.
 Set Asymmetric Patterns.
 Set Printing Projections.
 
 (* ================================================================= *)
-(** ** Network semantics (similar to Verdi) *)
-Module Net(Imp: Hio).
-  Import Imp.
+(** ** Network semantics *)
+Module Net.
+  Include Mixed.
   Import ListNotations.
-  Local Open Scope list_scope.
 
-  Parameter eqdec_uuid: RelDec (@eq uuid).
-  Context `{RelDec uuid (@eq uuid)}.
+  Notation agent T := (local * cmd T)%type (only parsing).
 
-  Definition agent := (local * com)%type.
-  Inductive system :=
-  | mkSys (agents: list agent).
+  Definition a := Return 0.
+  Definition b := Return true.
 
-  Fixpoint find(l: list agent)(x: uuid): option agent :=
-    match l with
-    | [] => None
-    | (h, p) :: ts => if rel_dec h.(id) x then Some (h, p) else find ts x
-    end.
+  Notation system l :=
+    (hlist (fun T: Type => agent T) l) (only parsing).
 
-  Definition add_msg(m: msg)(a: agent): agent :=
-    match a with
-    | (l, p) => (mkLocal l.(st) (l.(inbox) ++ [m]) l.(outbox) l.(id) l.(n), p)
-    end.
+  Record message := {
+      from: uid;
+      to: uid;
+      type : Type;
+      value : type
+    }.
+
+  Inductive label :=
+  | Msg (m : message)
+  | Silent.
+
+  Notation "[[ a ]]" := (Hcons a Hnil).
+  Notation "a +++ b" := (hlist_app a b) (at level 50, left associativity).
   
-  Inductive step: system -> system -> Prop :=
+  (** LTS *)
+  Inductive step: forall {l: list Type}, system l -> label -> system l -> Prop :=
+  | InternalStep: forall T thd tts
+                         (hd: system thd) (ts: system tts) (a a': agent T),
+      lstep a a' ->
+      step (hd +++ [[a]] +++ ts)
+           Silent
+           (hd +++ [[a']] +++ ts)
   | PeerMsgDeliver:
-    forall f (ts: list agent) t mid hd ts m recp foutbox newfrom pf,
-      find (hd ++ [(f, pf)] ++ mid ++ [t] ++ ts) recp = Some t ->
-      f.(outbox) = Peer recp m :: foutbox ->
-      newfrom = mkLocal f.(st) f.(inbox) foutbox f.(id) f.(n) ->
-      step (mkSys (hd ++ [(f, pf)] ++ mid ++ [t] ++ ts))
-           (mkSys (hd ++ [(newfrom, pf)] ++ mid ++ [add_msg (Peer f.(id) m) t] ++ ts))
-  | BroadcastDeliver:
-    forall f (ts: list agent) newagents hd ts m foutbox newfrom pf,
-      f.(outbox) = Broadcast m :: foutbox ->
-      newagents = map (add_msg (Peer f.(id) m)) (hd ++ ts) -> (** Deliver to myself? *)
-      newfrom = mkLocal f.(st) f.(inbox) foutbox f.(id) f.(n) ->
-      step (mkSys (hd ++ [(f, pf)] ++ ts))
-           (mkSys ((map (add_msg (Peer f.(id) m)) hd) ++
-                       [(newfrom, pf)] ++
-                  (map (add_msg (Peer f.(id) m)) ts)))
-  | NodeStep: forall hd ts st st' prog prog',
-      <{ prog / st ==> prog' / st' }> ->
-      step
-        (mkSys (hd ++ [(st, prog)] ++ ts))
-        (mkSys (hd ++ [(st', prog')] ++ ts)).
-
+    forall T T' T'' thd tts tmid
+           (hd: system thd) (mid: system tmid) (ts: system tts) src dst a v
+           (c: unit -> cmd T') (c': var -> cmd T''),
+      step (hd +++
+               [[(src, Bind (@Send T v dst) c)]] +++
+               mid +++
+               [[(dst, Bind (Recv a src) c')]] +++
+               ts)
+           (Msg {| from := src; to := dst; type := T; value := v |})
+           (hd +++
+               [[(src, c tt)]] +++
+               mid +++
+               [[(dst, c' a)]] +++
+               ts).
   
+  Inductive trsys A (R: A -> label -> A -> Prop): nat -> list label -> relation A :=
+  | refl: forall a, trsys R 0 [] a a
+  | trans: forall a b c n l tr, R a l b ->
+                         trsys R n tr b c ->
+                         trsys R (S n) (l :: tr) b c.
+
+  Notation "a =[ n ]=> b , tr" :=
+    (trsys step n tr a b) (at level 70, right associativity).
+
+  (** Example *)
+  Lemma terminates: forall (s: system [nat; nat]),
+    exists n s' tr,
+      (s =[n]=> s', tr).
 End Net.
