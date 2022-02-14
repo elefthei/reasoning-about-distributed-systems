@@ -36,7 +36,9 @@ Module Mixed.
   | Bind {A B} (c1 : cmd A)
          (c2 : A -> cmd B): cmd B
   | Recv (a : var)(from: uid): cmd var
-  | Send {A: Set} (r: A) (to: uid) : cmd unit
+  | Send {A: Set} (payload: A) (to: uid) : cmd unit
+  | Store {A: Set}(reg: var)(value: A): cmd unit
+  | Load {A: Set} (reg: var): cmd A
   | Loop {acc : Set} (init : acc)
          (body : acc -> cmd (loop_outcome acc)) : cmd acc.
  
@@ -44,8 +46,14 @@ Module Mixed.
   Notation "'for' x := i 'loop' c1 'done'" :=
     (Loop i (fun x => c1)) (right associativity, at level 80).
 
+  (** Heap is map *)
+  Record dyn := {
+      type: Type;
+      value: type
+    }.
+  
   (** No state for now, except my own uid *)
-  Definition local := uid.
+  Definition local := (uid * alist var dyn)%type.
                 
   (** LTS *)
   Inductive lstep : forall A, local * cmd A -> local * cmd A -> Prop :=
@@ -63,7 +71,16 @@ Module Mixed.
       lstep (l, Loop init body) (l, o <- body init; match o with
                                                    | Done a => Return a
                                                    | Again a => Loop a body
-                                                   end).
+                                                    end)
+  | StepStore: forall (A: Set) reg u ctx (val: A),
+      lstep ((u, ctx), @Store A reg val)
+            ((u, add reg {| type:= A; value:=val |} ctx),
+              Return tt)
+  | StepLoad: forall (A: Set) reg u (val: A) ctx,
+      lookup reg ctx = Some {| type := A; value := val |} -> 
+      lstep ((u, ctx), Load reg)
+            ((u, ctx), Return val).
+  
 
   Inductive blocked: forall A, cmd A -> Prop :=
   | RecvBlock: forall a u, blocked (Recv a u)

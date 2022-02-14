@@ -25,21 +25,19 @@ Module Net.
 
   Notation agent T := (local * cmd T)%type (only parsing).
 
-  Definition a := Return 0.
-  Definition b := Return true.
-
   Notation system l :=
     (hlist (fun T: Type => agent T) l) (only parsing).
 
   Record message := {
       from: uid;
       to: uid;
-      type : Type;
-      value : type
+      payload: dyn
     }.
 
   Inductive label :=
   | Msg (m : message)
+  | Read (user: uid)(v: var)
+  | Write (user: uid)(v: var)(val: dyn)
   | Silent.
 
   Notation "[[ a ]]" := (Hcons a Hnil).
@@ -58,15 +56,15 @@ Module Net.
            (hd: system thd) (mid: system tmid) (ts: system tts) src dst a v
            (c: unit -> cmd T') (c': var -> cmd T''),
       step (hd +++
-               [[(src, Bind (@Send T v dst) c)]] +++
+               [[(src, @Send T v dst) c]] +++
                mid +++
-               [[(dst, Bind (Recv a src) c')]] +++
+               [[(dst, Recv a src) c']] +++
                ts)
            (Msg {| from := src; to := dst; type := T; value := v |})
            (hd +++
-               [[(src, c tt)]] +++
+               [[(src, Return tt)]] +++
                mid +++
-               [[(dst, c' a)]] +++
+               [[(dst, Return a)]] +++
                ts).
   
   Inductive trsys A (R: A -> label -> A -> Prop): nat -> list label -> relation A :=
