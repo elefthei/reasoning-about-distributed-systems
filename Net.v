@@ -67,17 +67,37 @@ Module Net.
                [[(dst, Return a)]] +++
                ts).
   
-  Inductive trsys A (R: A -> label -> A -> Prop): nat -> list label -> relation A :=
-  | refl: forall a, trsys R 0 [] a a
-  | trans: forall a b c n l tr, R a l b ->
-                         trsys R n tr b c ->
-                         trsys R (S n) (l :: tr) b c.
+  Inductive trsys A (R: A -> label -> A -> Prop): list label -> relation A :=
+  | refl: forall a, trsys R [] a a
+  | trans: forall a b c h tr, R a h b ->
+                         trsys R tr b c ->
+                         trsys R (h :: tr) a c.
 
-  Notation "a =[ n ]=> b , tr" :=
-    (trsys step n tr a b) (at level 70, right associativity).
+  Notation "a =[ tr ]=> b" :=
+    (trsys step tr a b) (at level 70, right associativity).
+
+  Definition bar : Type := nat.
+  Definition foo: list Type := [nat: Type; nat: Type].
+
+  Definition system_forall {l: list Type}(s: system l)(f: forall T, cmd T -> Prop): Prop.
+    induction s.
+    - exact True.
+    - destruct f0.
+      exact (f l c /\ IHs).
+  Defined.
 
   (** Example *)
-  Lemma terminates: forall (s: system [nat; nat]),
-    exists n s' tr,
-      (s =[n]=> s', tr).
+  Lemma terminates: forall (s: system [nat: Type; nat: Type]),
+    exists s' tr,
+      s =[ tr ]=> s' /\ system_forall s returned.
+  Proof.
+    induction s.
+    - (** Hnil *)
+      exists Hnil, [].
+      split.
+      + econstructor.
+      + reflexivity.
+    - (** Hcons *)
+      inversion IHs.
+      + 
 End Net.
