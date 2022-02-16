@@ -52,19 +52,18 @@ Module Net.
            Silent
            (hd +++ [[a']] +++ ts)
   | PeerMsgDeliver:
-    forall T T' T'' thd tts tmid
-           (hd: system thd) (mid: system tmid) (ts: system tts) src dst a v
-           (c: unit -> cmd T') (c': var -> cmd T''),
+    forall T thd tts tmid c c'
+           (hd: system thd) (mid: system tmid) (ts: system tts) (src dst: uid) a v,
       step (hd +++
-               [[(src, @Send T v dst) c]] +++
+               [[((src, c), @Send T v dst)]] +++
                mid +++
-               [[(dst, Recv a src) c']] +++
+               [[((dst, c'), Recv a src)]] +++
                ts)
-           (Msg {| from := src; to := dst; type := T; value := v |})
+           (Msg {| from := src; to := dst; payload := {| type := T; value := v |} |})
            (hd +++
-               [[(src, Return tt)]] +++
+               [[((src, c), Return tt)]] +++
                mid +++
-               [[(dst, Return a)]] +++
+               [[((dst, c'), Return a)]] +++
                ts).
   
   Inductive trsys A (R: A -> label -> A -> Prop): list label -> relation A :=
@@ -100,4 +99,6 @@ Module Net.
     - (** Hcons *)
       inversion IHs.
       + 
+  Admitted.
+
 End Net.
