@@ -2,7 +2,9 @@ From Coq Require Import
      List
      Lia
      Relations
-     Arith.Arith.
+     Arith.Arith
+     Init.Specif
+     Program.Equality.
 
 From ExtLib Require Import
      Core.RelDec
@@ -13,35 +15,46 @@ From ExtLib Require Import
 
 From RDS Require Import Mixed.
 
+Import ListNotations.
+
 Set Implicit Arguments.
 Set Asymmetric Patterns.
 Set Printing Projections.
+
+From Equations Require Import Equations.
 
 (* ================================================================= *)
 (** ** Network semantics *)
 Module Net.
   Include Mixed.
-  Import ListNotations.
 
-  Notation agent T := (local * cmd T)%type (only parsing).
-
+  (** list of agents *)
+  Notation agent T:= (local * cmd T)%type.
   Notation system l :=
-    (hlist (fun T: Type => agent T) l) (only parsing).
+    (hlist (fun T: Type => agent T) l).
 
-  Record message := {
-      from: uid;
-      to: uid;
-      payload: dyn
-    }.
 
-  Inductive label :=
-  | Msg (m : message)
-  | Read (user: uid)(v: var)
-  | Write (user: uid)(v: var)(val: dyn)
-  | Silent.
+  (*
+  Program Definition singleton A (a: agent A): system [A] :=
+    Hcons a Hnil.
 
+  Program Definition system_app l1 l2 (a: system l1)(b: system l2):
+    system (l1 ++ l2) :=
+    hlist_app (proj1_sig a) (proj1_sig b).
+  Next Obligation.
+    destruct a, b.
+    rewrite app_length.
+    lia.
+  Defined.
+
+  Definition system_hd h (s: system [h]): agent h.
+  destruct s; dependent destruction x; cbn in *; exact p.
+  Defined.
+
+*)    
   Notation "[[ a ]]" := (Hcons a Hnil).
   Notation "a +++ b" := (hlist_app a b) (at level 50, left associativity).
+  Notation "a ::: ts" := (Hcons a ts) (at level 40, left associativity).
   
   (** LTS *)
   Inductive step: forall {l: list Type}, system l -> label -> system l -> Prop :=
@@ -65,38 +78,33 @@ Module Net.
                mid +++
                [[((dst, c'), Return a)]] +++
                ts).
-  
-  Inductive trsys A (R: A -> label -> A -> Prop): list label -> relation A :=
-  | refl: forall a, trsys R [] a a
-  | trans: forall a b c h tr, R a h b ->
-                         trsys R tr b c ->
-                         trsys R (h :: tr) a c.
 
   Notation "a =[ tr ]=> b" :=
-    (trsys step tr a b) (at level 70, right associativity).
+    (trsys_label step tr a b) (at level 70, right associativity).
 
-  Definition bar : Type := nat.
-  Definition foo: list Type := [nat: Type; nat: Type].
-
-  Definition system_forall {l: list Type}(s: system l)(f: forall T, cmd T -> Prop): Prop.
-    induction s.
-    - exact True.
-    - destruct f0.
-      exact (f l c /\ IHs).
-  Defined.
+  Hint Constructors step trsys_label: core.
+  
+  Program Fixpoint system_forall {l: list Type}(s: system l)(f: forall T, agent T -> Prop) : Prop :=
+    match s with
+    | Hnil => True
+    | Hcons _ _ h ts => f _ h /\ system_forall ts f
+    end.
 
   (** Example *)
-  Lemma terminates: forall (s: system [nat: Type; nat: Type]),
+
+  Lemma agent_terminates: forall T (a: agent T),
+      
+  Lemma terminates: forall (s: system [nat: Type]),
     exists s' tr,
-      s =[ tr ]=> s' /\ system_forall s returned.
+      s =[ tr ]=> s' /\ system_forall s (fun _ a => returned (snd a)).
   Proof.
-    induction s.
+    intros; destruct s.
     - (** Hnil *)
       exists Hnil, [].
-      split.
-      + econstructor.
-      + reflexivity.
+      split; eauto; reflexivity.
     - (** Hcons *)
+      destruct p; induction c.
+      + 
       inversion IHs.
       + 
   Admitted.
