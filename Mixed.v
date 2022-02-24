@@ -1,3 +1,7 @@
+From ITree Require Import
+     ITree
+     ITreeFacts.
+
 From Coq Require Import
      List
      Lia
@@ -7,14 +11,11 @@ From Coq Require Import
 
 From ExtLib Require Import
      Structures.Maps
-     Structures.Monoid
-     Data.Map.FMapAList
-     Core.RelDec
-     Data.Nat
-     Structures.Monad
-     Structures.MonadLaws.
+     FMapAList
+     RelDec
+     Monad.
 
-From RDS Require Import Utils.
+From RDS Require Import Utilities.
 
 Import ListNotations.
 
@@ -23,35 +24,33 @@ Set Asymmetric Patterns.
 Set Printing Projections.
 
 Module Mixed.
-  Include Utils.
-
-  Inductive loop_outcome(acc: Type) :=
-  | Done (a : acc)
-  | Again (a : acc).
+  Include Utilities.
 
   (** cmd *)
   Inductive cmd : Set -> Type :=
   | Return {A: Set} (r : A) : cmd A
-  | Bind {A B} (c1 : cmd A)
+  | Bind {A B: Set} (c1 : cmd A)
          (c2 : A -> cmd B): cmd B
-  | Recv {A: Set}(a : var)(from: uid): cmd A
-  | Send {A: Set} (payload: A) (to: uid) : cmd unit
-  | Store {A: Set}(reg: var)(value: A): cmd unit
-  | Restart: cmd unit
-  | Load {A: Set} (reg: var): cmd A
-  | Loop {acc : Set} (init : acc)
-         (body : acc -> cmd (loop_outcome acc)) : cmd acc.
+  | Recv {t: primtype}(a : var)(from: uid): cmd t
+  | Send {t: primtype} (payload: primtypeDenote t) (to: uid) : cmd unit 
+  | Store {t: primtype}(reg: var)(value: primtypeDenote t): cmd unit
+  | Load (t: primtype) (reg: var): cmd (option t)
+  | Case {A B: Set} (o: option A)(d: cmd B)(k: A -> cmd B): cmd B.
  
   Notation "x <- c1 ; c2" := (Bind c1 (fun x => c2)) (right associativity, at level 80).
-  Notation "'for' x := i 'loop' c1 'done'" :=
-    (Loop i (fun x => c1)) (right associativity, at level 80).
+
+  Notation "'case' o 'of' '|' 'None' '=>' d '|' 'Some' x '=>' k 'end'" :=
+    (Case o d (fun x => k)) (o at level 99, d at level 99, x constr at level 1,
+                              k at level 99,
+                              left associativity, at level 99). 
+
 
   (* Agent has state and a program *)
   Notation agent T := (local * cmd T)%type.
 
   (** LTS *)
-  Inductive lstep : forall A, agent A -> agent A -> Prop :=
-  | StepBindRecur : forall result result' l l'
+  Inductive lstep : forall {A: Set}, agent A -> agent A -> Prop :=
+  | StepBindRecur : forall (result result': Set) l l'
                       (c1 c1' : cmd result')
                       (c2 : result' -> cmd result),
       lstep (l, c1) (l', c1') ->
@@ -60,37 +59,34 @@ Module Mixed.
                         (v : result') l
                         (c2 : result' -> cmd result),
     lstep (l, Bind (Return v) c2) (l, c2 v)
-  | StepLoop : forall (acc : Set) (init : acc) l
-                      (body : acc -> cmd (loop_outcome acc)),
-      lstep (l, Loop init body) (l, o <- body init; match o with
-                                                   | Done a => Return a
-                                                   | Again a => Loop a body
-                                                    end)
-  | StepStore: forall (A: Set) reg u ctx (val: A),
-      lstep (u, ctx, @Store A reg val)
-            (u, add reg {| type:= A; value:=val |} ctx,
+  | StepStore: forall (t: primtype) reg u ctx (val: t),
+      lstep (u, ctx, @Store t reg val)
+            (u, add reg (serialize t val) ctx,
               Return tt)
-  | StepLoadFound: forall (A: Set) reg u (val: A) ctx,
-      lookup reg ctx = Some {| type := A; value := val |} -> 
-      lstep (u, ctx, Load reg)
-            (u, ctx, Return val)
-  | StepLoadError: forall (A: Set) reg u (val: A) ctx,
-      lookup reg ctx = None ->
-      lstep (u, ctx, Load reg)
-            (u, ctx, Restart).
+  | StepLoad: forall (t: primtype) reg u ctx,
+      lstep (u, ctx, Load t reg)
+            (u, ctx, Return (match lookup reg ctx with
+                             | Some v => Some (deserialize t v)
+                             | None => None
+                             end))
+  | StepCaseSome: forall {A B: Set} u ctx (a: A) (k: A -> cmd B) (d: cmd B),
+      lstep (u, ctx, Case (Some a) d k)
+            (u, ctx, k a)
+  | StepCaseNone: forall {A B: Set} u ctx (k: A -> cmd B) (d: cmd B),
+      lstep (u, ctx, Case (@None A) d k)
+            (u, ctx, d).
 
-  Notation "a '-[' n ']->' b" := (@trsys_nat (agent _) (@lstep _) n a b) (at level 65, right associativity).
+  Notation "a '==>' b" := (@trsys (agent _) (@lstep _) a b) (at level 65, right associativity).
 
   Inductive blocked: forall A, cmd A -> Prop :=
-  | RecvBlock: forall {A: Set} a u, blocked (@Recv A a u)
-  | SendBlock: forall {A: Set} {a: A} u, blocked (Send a u)
-  | RestartBlock: blocked (Restart)
-  | BindBlock: forall A B (p: cmd A)(c: A -> cmd B), blocked p -> blocked (x <- p; c x).
+  | RecvBlock: forall {A: primtype} a u, blocked (@Recv A a u)
+  | SendBlock: forall {A: primtype} {a: A} u, blocked (Send a u)
+  | BindBlock: forall {A B: Set} (p: cmd A)(c: A -> cmd B), blocked p -> blocked (x <- p; c x).
 
   Inductive returned: forall A, cmd A -> Prop :=
   | DoneCmd: forall {A: Set} {n: A}, returned (Return n).
 
-  Hint Constructors blocked returned lstep trsys_nat: core.
+  Global Hint Constructors blocked returned lstep trsys: core.
 
   Lemma agent_lstep_terminates_or_blocked:
     forall A ctx p,
@@ -111,73 +107,33 @@ Module Mixed.
           exists (x <- p'; c2 x)...
     - left...
     - left...
-    - right. right. destruct ctx.
-      exists (u, add reg {| type := A; value := value0 |} a).
+    - right. right. destruct ctx as [u heap].
+      exists (u, add reg (serialize t0 value) heap).
       exists (Return tt)...
-    - left...
     - right. right. exists ctx.
-      destruct ctx.
-      destruct (lookup reg a) eqn:Hload.
-      + dependent destruction d.
-        exists (Return value0).
-      (* Load could fail add exceptions! *)
-  Admitted.
+      destruct ctx as [u heap].
+      exists (Return (match lookup reg heap with
+                      | Some v => Some (deserialize t0 v)
+                      | None => None
+                      end))...
+    - right. right.
+      destruct ctx as [u heap].      
+      exists (u, heap).
+      destruct o eqn:Hopt.      
+      exists (k a)...
+      exists p...
+  Defined.
 
   Lemma agent_terminates_or_blocked:
-    forall (a: agent nat), exists ctx' p' n,
-      (a -[n]-> (ctx', p')) /\ (blocked p' \/ returned p').
+    forall (a: agent nat), exists ctx' p',
+      (a ==> (ctx', p')) /\ (blocked p' \/ returned p').
   Proof with eauto.
     intros [[uid heap] prog].
     induction prog.
     - (* Return *)
-      exists (uid, heap); exists (Return r); exists 0...
+      exists (uid, heap); exists (Return r); eexists... 
     - (* Bind: inductive case *)
-      destruct IHprog as [ctx' [p' [n' [H1 [H2|H2]]]]].
-      dependent induction H1.
-      + exists (uid, heap).
-        exists (x <- p'; c2 x).
-        eexists. 
-        split.
-        * eapply refl.
-        * left. econstructor.
-          apply H2.
-      + destruct b; subst.
-
-        specialize (IHtrsys_nat uid heap _ prog c2 H l _ eq_refl
-                                JMeq_refl
-                                JMeq_refl
-                                JMeq_refl
-                   ).
-        
-        exists (ctx').
-        exists (x <- c; c2 x).
-        eexists.
-        split.
-        * e
-          eapply refl.
-          eapply StepBindRecur.
-          eapply trans.
-          inversion H1; subst.
-          -- inversion H1; subst.
-          eapply StepBindRecur.
-          econstructor.
-          
-      destruct 
-      eexists.
-      eexists.
-      eexists.
-      split.
-      + eapply econstructor.
-      + 
-      admit.
-    - (* Recv *)
-      exists (uid, heap); exists (Recv a from0); exists 0...
-    - (* Send *)
-      exists (uid, heap); exists (Send payload0 to0); exists 0...
-    - (* Store *)
-      exists (uid, (add reg {| type := A; value := value0 |} heap)).
-      eexists. exists 1...
-    - (* Load *)
+      destruct IHprog as [[uid' heap'] [p' [IHstep IHterm]]]. 
   Admitted.
   
 End Mixed.
