@@ -102,22 +102,22 @@ Module Mixed.
           right. right.
           exists ctx. exists (c2 n)...
         * destruct H0 as [ctx' [p' H']].
-          right. right.
+          right; right;
           exists ctx'.
           exists (x <- p'; c2 x)...
     - left...
     - left...
-    - right. right. destruct ctx as [u heap].
+    - right; right; destruct ctx as [u heap].
       exists (u, add reg (serialize t0 value) heap).
       exists (Return tt)...
-    - right. right. exists ctx.
+    - right; right; exists ctx.
       destruct ctx as [u heap].
       exists (Return (match lookup reg heap with
                       | Some v => Some (deserialize t0 v)
                       | None => None
                       end))...
-    - right. right.
-      destruct ctx as [u heap].      
+    - right; right;
+        destruct ctx as [u heap].      
       exists (u, heap).
       destruct o eqn:Hopt.      
       exists (k a)...
@@ -128,12 +128,13 @@ Module Mixed.
     forall (a: agent nat), exists ctx' p',
       (a ==> (ctx', p')) /\ (blocked p' \/ returned p').
   Proof with eauto.
-    intros [[uid heap] prog].
-    induction prog.
-    - (* Return *)
-      exists (uid, heap); exists (Return r); eexists... 
-    - (* Bind: inductive case *)
-      destruct IHprog as [[uid' heap'] [p' [IHstep IHterm]]]. 
+    intros [ctx prog].
+    destruct (agent_lstep_terminates_or_blocked ctx prog) as [H | [H | H]].
+    - exists ctx; exists prog; split...
+    - exists ctx; exists prog; split...
+    - destruct H as [ctx' [p' H]].
+      exists ctx'; exists p'; split...
+      (** Need some induction on number of steps here... *)
   Admitted.
   
 End Mixed.
