@@ -149,7 +149,7 @@ Module Agent(S: SSystem).
   
   Module Net := Net(S).
   Module Storage := Storage(S).
-  Import Net Storage S.
+  Export Net Storage S.
   
   Notation Sys := (Storage +' Net) (only parsing).
 
