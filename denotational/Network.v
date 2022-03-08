@@ -2,137 +2,173 @@ From ITree Require Import
      ITree
      Events.State.
 
-From CTree Require Import
+From CTree Require
      CTrees.
 
 From CTree Require Import
-     Utils.
+     Utils. (* fin notation here *)
 
 From ExtLib Require Import
-     Maps
      Monad
-     FMapAList
-     Applicative
-     Traversable.
+     RelDec.
 
 From Coq Require Import
      Vector
-     Fin
+     List
+     Fin (* fin definition here *)
      Program.Equality.
 
-From Equations Require Import Equations.
+From Equations Require Import
+     Equations.
 
+From DSL Require Import
+     System.
 
-From DSL Require Import Agent.
-
-Import VectorNotations.
 Import CTrees.CTreeNotations.
+Import ListNotations.
 Local Open Scope ctree_scope.
+Local Open Scope list_scope.
 
 (** Network *)
 Module Network(S: SSystem).
-  Module A := Agent(S).
-  Import A.
+  Module Net := Net(S).
+  Module Storage := Storage(S).
+  Export Net Storage S.
 
-  Definition vec n T := Vector.t T n.
+  (** Local storage and message passing effects *)
+  Notation Sys := (Storage +' Net) (only parsing).
 
-  Definition handle_state {R}(e: itree Sys R): Monads.stateT heap (itree Net) R :=
-    run_state e.
-
-  (** This is roughly the choices of the scheduler
-      1. Pick any of the \Chose(n, 2) pairs of (Sender * Receiver) from the n agents.
-      2. For each pair (Sender * Receiver) there are cases
-         a. The message is delivered
-         b. The message is dropped
-         c. (Partially delivered for UDP?)
-      3. Need to prove that all the choises above collapse to two choises
-         a. The Network has taken a single step (ex: append-only log row appended)
-         b. No step was taken (idempotence)
-   *)
+  (** A queue of messages used to buffer *)
   Definition queue := list Msg.
 
-  Locate "_ <- _ ;; _".
+  (** These are utils, move them *)
+  Fixpoint last{A}(l: list A): option A :=
+    match l with
+    | nil => None
+    | cons h (List.nil) => Some h
+    | cons h ts => last ts
+    end.
+
+  Fixpoint init{A}(l: list A): list A :=
+    match l with
+    | List.nil => List.nil
+    | List.cons h (List.nil) => List.nil
+    | List.cons h ts => List.cons h (init ts)
+    end.
+
+  Equations safe_nth{T}(l: list T)(i: fin (List.length l)): T :=
+    safe_nth (h :: ts) F1 := h;
+    safe_nth (h :: ts) (FS k) := safe_nth ts k.
+
+  Equations list_rm{T}(l: list T)(i: fin (List.length l)): list T :=
+    list_rm (h :: ts) F1 := ts;
+    list_rm (h :: ts) (FS k) := h :: list_rm ts k.
+
+  Equations list_replace{T}(l: list T)(i: fin (List.length l))(a: T): list T :=
+    list_replace (h::ts) F1 a := a :: ts;
+    list_replace (h::ts) (FS k) a := h :: list_replace ts k a.
+
+  Notation "v '@' i ':=' a" := (list_replace v i a) (at level 70).
+  Notation "v '$' i" := (safe_nth v i) (at level 80).
+  Notation "v '--' i" := (list_rm v i) (at level 80).
   
-  Definition sched: ctree void1 nat.
-    refine (i <- choice true 1 ;;
-    Ret (proj1_sig (to_nat i))).
+  Lemma list_replace_length_eq:
+    forall A (v: list A) i a,
+      List.length (v @ i := a) = List.length v.
+  Proof.
+    intros.
+    dependent induction v.
+    - inversion i.
+    - cbn in *; dependent destruction i.
+      + replace (list_replace (a :: v) F1 a0) with (a0 :: v) by reflexivity;
+          reflexivity.
+      + replace (list_replace (a :: v) (FS i) a0) with
+          (a :: (list_replace v i a0)) by reflexivity;
+            cbn; auto.
   Defined.
 
+  (** TODO: figure out UID <-> fin t mapping *)
+  Parameter uid_to_fin: forall t, uid -> fin t.
+  Parameter fin_to_uid: forall t, fin t -> uid.
+  Arguments uid_to_fin {t}.
+  Arguments fin_to_uid {t}.
+  Coercion uid_to_fin: uid >-> fin.
+  Coercion fin_to_uid: fin >-> uid.
 
-  Equations vector_remove{A n}(v: vec (S n) A)(i: fin (S n)) : vec n A by wf n lt :=
-    vector_remove (h :: h' :: ts) (FS (FS j)) := h :: (vector_remove (h' :: ts) (FS j));
-    vector_remove (h :: h' :: ts) (FS F1) := h :: ts;
-    vector_remove (h :: h' :: ts) F1 := h' :: ts;
-    vector_remove (h::nil) F1 := @nil A.
-                                                   
-  Equations vector_replace{A n}(v: vec (S n) A)(i: fin (S n))(a: A): vec (S n) A by wf n lt :=
-    vector_replace (h :: h' :: ts) (FS (FS j)) a := h :: (vector_replace (h' :: ts) (FS j) a);
-    vector_replace (h :: h' :: ts) (FS F1) a := h :: a :: ts;
-    vector_replace (h :: h' :: ts) F1 a := a :: h' :: ts;
-    vector_replace (h::nil) F1 a := [a].
+  Equations handle_agent {R: Type}
+            (agent: itree' Net R)
+            (sys: list (queue * itree Net R))
+            (done: list (queue*R))
+            (i: fin (List.length sys))
+            (q: queue)
+            (schedule: list (queue * itree Net R) ->
+                       list (queue*R) ->
+                       CTrees.ctree void1 (list (queue*R))):
+    CTrees.ctree void1 (list (queue*R)) :=
+    (** Agent returned, add to `done` *)
+    handle_agent (RetF v) sys done i q schedule :=
+      CTrees.TauI (schedule (sys -- i) ((q, v) :: done));
+    
+    (** Agent silent step, unwrap and replace in sys *)
+    handle_agent (TauF t) sys done i q schedule :=
+      CTrees.TauI (schedule (sys @ i := (q, t)) done);
+                  
+    (** Agent trying to send a msg, may fail *)
+    handle_agent (VisF (Send msg) k) sys done i q schedule :=
+      (** TODO: Msg may be sent to `done`, handle that case *)
+      let r := uid_to_fin (principal msg) in
+      let (queue', agent') := sys $ i in
+      let msg' := {| principal := i; payload := payload msg |} in
+      let sys' := sys @ r := (msg' :: queue', agent') in
+      (** Msg delivery could fail (sys) or succeed (sys') *)
+      CTrees.choiceV2
+        (** It succeeds, do some type-casting for i *)
+        (let i' :=
+           eq_rec_r (fun n: nat => fin n) i
+                    (list_replace_length_eq _ sys r _) in
+         CTrees.TauV (schedule (sys' @ i' := (q, k tt)) done))
+        (** Msg delivery failed *)
+        (CTrees.TauV (schedule (sys  @ i := (q, k tt)) done));
+    
+    (** Agent always receives a msg, non-det on send *)
+    handle_agent (VisF Recv k) sys done i q schedule :=
+      match last q with 
+      | Some msg =>
+          (** Pop the msg from the end *)
+          CTrees.TauV (schedule (sys @ i := (init q, k msg)) done)
+      | None =>
+          (** Just loop again if no messages in Q *)
+          CTrees.TauI (schedule sys done)
+      end;
 
-  (** A vector that used to be ordered (the fin i is the proper index) and now is not *)
-  Definition unordered_vec n A := vec n (fin n * A).
+    (** Agent broadcasts a msg (TODO: non-det) *)
+    handle_agent (VisF (Broadcast b) k) sys done i q schedule :=
+      let msg := {| principal := fin_to_uid i; payload := b |} in
+      let sys' := List.map (fun a =>
+                              match a with
+                              | (q, a) => (msg :: q, a)
+                              end) sys in
+      CTrees.TauV (schedule sys' done).
 
-  (** TODO, otherwise; indexed fin sets *)
-  Parameter reorder: forall n A, unordered_vec n A -> vec n A.
-  Arguments reorder {n} {A}.
+  (** Main scheduler here *)
+  Equations schedule_network {R: Type}
+            (schedule: list (queue * itree Net R) ->
+                       list (queue*R) ->
+                       CTrees.ctree void1 (list (queue*R)))
+            (sys: list (queue * itree Net R))
+            (done: list (queue*R)):
+    CTrees.ctree void1 (list (queue*R)) :=
+    
+    (** Return here *)
+    schedule_network _ [] done := CTrees.Ret done;
+    
+    (** Loop until all agents are done *)
+    schedule_network schedule sys done :=
+      (** Non-det pick an agent to execute (by index) *)
+      i <- choice true (List.length sys) ;;
+      let (q, agent) := sys $ i in
+      handle_agent (observe agent) sys done i q schedule.
 
-  (** TODO: fin uids? *)
-  Parameter uid_to_fin: forall (n: nat), uid -> fin n.
-
-  Notation "v '@' i ':=' a" := (vector_replace v i a) (at level 80).
-  Notation "v '--' i" := (vector_remove v i) (at level 80).
-
-  Equations schedule_network {R n m}
-            (schedule: vec n (queue * itree Net R) ->
-                       unordered_vec m (queue*R) ->
-                       CTrees.ctree void1 (vec n (queue*R)))
-            (sys: vec n (queue * itree Net R))(done: unordered_vec m (queue*R)):
-    CTrees.ctree void1 (vec n (queue*R)) :=
-    (** No running agents left, terminate *)
-    schedule_network _ nil all := Ret (@reorder (0+m) _ all);
-    (** At least one running agent: network semantics *)
-    schedule_network schedule (h :: ts) rest :=
-      (** Non-det pick an agent to execute *)
-      i <- choice true n ;;
-      let (queue, agent) := sys[@i] in
-      match agent with
-      (** Agent returned, add to `done` and execute the other agents next *)
-      | RetF v => Tau (schedule (sys -- i) (i, queue, agent) :: rest)
-      (** Agent silent step, unwrap and replace in sys *)
-      | TauF t => Tau (schedule (sys @ i := (queue, t)) rest)
-      (** Agent trying to send a msg. TODO: add message failure choice *)
-      | VisF (Send msg) k =>
-          let r := uid_to_fin n (principal msg) in
-          let (queue', agent') := sys[@r] in
-          let sys' := sys @ r := (msg::queue', agent') in (** TODO: Some recv hook here? *)
-          Tau (schedule (sys' @ i := (queue, k tt)) rest)
-      (** Agent always receives a msg *)
-      | VisF Recv k =>
-          match tl queue with (** Pop from the end (FIFO) *)
-          | Some msg => Tau (schedule (sys @ i := (init queue, k msg)) rest)
-          | None => Tau (schedule sys rest) (** Just loop again if no message (infinite loop?) *)
-          end
-      end.
-      
-      (** schedule (system: vec n (itree Net Local)(done: vec ?? nat) :=
-            fun (queues: vec n Q) =>
-              i <- chose n;;
-              match system[i] with 
-              | Ret v => schedule system queues
-              | Tau t => Tau (schedule (system [i := t] queues))
-              | Vis (Send (m, j)) k =>
-                Tau (schedule (system [i:=k tt]) queues[j]:=
-                    (m,i) :: queues[j])
-              | Vis Recv k =>
-                    (match list.rev(queues[i]) with
-                    | [] => Tau (schedule system queues)
-                    | (m,j) :: rest =>
-                            Tau (schedule system[i:= k(m,j)]
-                                   queue[j] := List.rev rest)
-                    end
-              end
-  *)
+  CoFixpoint schedule {R: Type} := @schedule_network R schedule.
 End Network.
-Ret 
+

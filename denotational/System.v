@@ -1,5 +1,5 @@
-From Coq Require Export
-     Strings.String
+From Coq Require Import
+     String
      Relations.
 
 From ITree Require Import
@@ -145,20 +145,3 @@ Module Storage(S: Systems).
     get >>= fun s => put (add v b s).
 End Storage.  
 
-Module Agent(S: SSystem).
-  
-  Module Net := Net(S).
-  Module Storage := Storage(S).
-  Export Net Storage S.
-  
-  Notation Sys := (Storage +' Net) (only parsing).
-
-  (** Program using state and network *)
-  Definition example : itree Sys unit :=
-    m <- recv ;;
-    store "m" (m.(payload)) ;;
-    broadcast (m.(payload)).
-
-  Check run_state example.
-
-End Agent.
