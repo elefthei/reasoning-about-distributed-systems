@@ -24,12 +24,14 @@ From Equations Require Import
      Equations.
 
 From DSL Require Import
-     System.
+     System
+     Lists.
 
 Import CTrees.CTreeNotations.
 Import ListNotations.
 Local Open Scope ctree_scope.
 Local Open Scope list_scope.
+Local Open Scope fin_list_scope.
 
 (** Network *)
 Module Network(S: SSystem).
@@ -43,52 +45,6 @@ Module Network(S: SSystem).
   (** A queue of messages used to buffer *)
   Definition queue := list Msg.
 
-  (** These are utils, move them *)
-  Fixpoint last{A}(l: list A): option A :=
-    match l with
-    | [] => None
-    | [h] => Some h
-    | h :: ts => last ts
-    end.
-
-  Fixpoint init{A}(l: list A): list A :=
-    match l with
-    | [] => nil
-    | [h] => nil
-    | h :: ts => cons h (init ts)
-    end.
-
-  Equations safe_nth{T}(l: list T)(i: fin (length l)): T :=
-    safe_nth (h :: ts) F1 := h;
-    safe_nth (h :: ts) (FS k) := safe_nth ts k.
-
-  Equations list_rm{T}(l: list T)(i: fin (length l)): list T :=
-    list_rm (h :: ts) F1 := ts;
-    list_rm (h :: ts) (FS k) := h :: list_rm ts k.
-
-  Equations list_replace{T}(l: list T)(i: fin (length l))(a: T): list T :=
-    list_replace (h::ts) F1 a := a :: ts;
-    list_replace (h::ts) (FS k) a := h :: list_replace ts k a.
-
-  Notation "v '@' i ':=' a" := (list_replace v i a) (at level 80).
-  Notation "v '$' i" := (safe_nth v i) (at level 80).
-  Notation "v '--' i" := (list_rm v i) (at level 80).
-  
-  Lemma list_replace_length_eq:
-    forall A (v: list A) i a,
-      length (v @ i := a) = length v.
-  Proof.
-    intros.
-    dependent induction v.
-    - inversion i.
-    - cbn in *; dependent destruction i.
-      + replace (list_replace (a :: v) F1 a0) with (a0 :: v) by reflexivity;
-          reflexivity.
-      + replace (list_replace (a :: v) (FS i) a0) with
-          (a :: (list_replace v i a0)) by reflexivity;
-            cbn; auto.
-  Defined.
-        
   (** TODO: figure out UID <-> fin t mapping *)
   Parameter uid_to_fin: forall t, uid -> fin t.
   Parameter fin_to_uid: forall t, fin t -> uid.
