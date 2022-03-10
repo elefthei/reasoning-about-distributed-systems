@@ -11,6 +11,7 @@ From CTree Require Import
 From ExtLib Require Import
      Monad
      List
+     Traversable
      RelDec.
 
 From Coq Require Import
@@ -69,10 +70,6 @@ Module Network(S: SSystem).
     list_replace (h::ts) F1 a := a :: ts;
     list_replace (h::ts) (FS k) a := h :: list_replace ts k a.
 
-  Equations list_monomap_except{A}(f: A -> A)(l: list A)(i: fin (length l)): list A :=
-    list_monomap_except f (h::ts) F1 := h :: map f ts;
-    list_monomap_except f (h::ts) (FS k) := f h :: list_monomap_except f ts k.
-    
   Notation "v '@' i ':=' a" := (list_replace v i a) (at level 80).
   Notation "v '$' i" := (safe_nth v i) (at level 80).
   Notation "v '--' i" := (list_rm v i) (at level 80).
@@ -90,20 +87,6 @@ Module Network(S: SSystem).
       + replace (list_replace (a :: v) (FS i) a0) with
           (a :: (list_replace v i a0)) by reflexivity;
             cbn; auto.
-  Defined.
-
-  Lemma list_monomap_except_length_eq:
-    forall A (v: list A)(f: A -> A) i,
-      length (list_monomap_except f v i) = length v.
-  Proof.
-    dependent induction v; cbn; intros.
-    - inversion i.
-    - dependent destruction i.
-      + replace (list_monomap_except f (a :: v) (@F1 (length v)))
-          with (a :: map f v) by reflexivity; cbn;
-          rewrite map_length; reflexivity.
-      + replace (list_monomap_except f (a :: v) (FS i))
-          with (f a :: list_monomap_except f v i) by reflexivity; cbn; auto.
   Defined.
         
   (** TODO: figure out UID <-> fin t mapping *)
@@ -126,7 +109,7 @@ Module Network(S: SSystem).
     
     (** Loop until all agents are done *)
     schedule_network schedule sys done :=
-      (** Non-det pick an agent to execute (by index) *)
+      (** Non-det pick an agent to execute *)
       i <- choice true (length sys) ;;
       let (q, a) := sys $ i in
       match observe a with
@@ -158,19 +141,22 @@ Module Network(S: SSystem).
               CTrees.TauI (schedule sys done)
           end
       | VisF (Broadcast b) k =>
-          (** TODO: Make non-det on each agent *)
+          (** Non-det delivery on each agent *)
           let msg := {| principal := fin_to_uid i; payload := b |} in
-          (** Does not deliver msg back to sender *)
-          let sys' := list_monomap_except
-                        (fun a: list Msg * itree Net R =>
-                           let (q, a') := a in (msg :: q, a')) sys i in
-          let i' := eq_rec_r (fun n: nat => fin n) i
-                             (list_monomap_except_length_eq _ sys _ i) in
-          CTrees.TauV (schedule (sys' @ i' := (q, k tt)) done)
-
+          let sys' := sys @ i := (q, k tt) in
+          (** TODO: Delivers msg back to sender. It is tricky
+              to recover `i` after `mapT` to modify the sender queue,
+              so my best guess is a function `mapT_except` that gives
+              everyone a choice except `i` who is just `Ret (q, k tt)` *)
+          sys'' <- mapT (fun a: list Msg * itree Net R =>
+                          let (q', a') := a in
+                          CTrees.choiceV2
+                            (CTrees.Ret (msg :: q', a'))
+                            (CTrees.Ret (q', a'))) sys';;
+          CTrees.TauV (schedule sys'' done)
       end.
-  
-  CoFixpoint schedule (R: Type) := @schedule_network R (schedule R).
+    
+  CoFixpoint schedule {R: Type} := @schedule_network R schedule.
 
 End Network.
 
