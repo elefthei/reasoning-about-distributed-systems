@@ -1,15 +1,15 @@
 From Coq Require Import
      String
+     Fin
      Relations.
 
 From ITree Require Import
+     ITree
      Events.State
      Events.StateFacts.
 
-Set Implicit Arguments.
-Set Contextual Implicit.
+From Equations Require Import Equations.
 
-From ITree Require Import ITree.
 From CTree Require Import
      CTrees.
      
@@ -26,6 +26,9 @@ Local Open Scope monad_scope.
 Local Open Scope string_scope.
 
 Set Implicit Arguments.
+Set Contextual Implicit.
+
+Notation fin := t.
 
 (** Some general Sets needed for Systems work *)
 Module Type Systems.
@@ -63,33 +66,70 @@ Module Type SSystem <: Systems.
 End SSystem.
 
 Module Net(S: Systems).
-
   Import S.
 
-    Record Msg := {
+  (** Number of agents *)
+  Parameter n: nat.
+
+  (** UID is a fin. This is enforced by the type signature of `choice` in CTrees *)
+  Definition uid := fin n.
+
+  Equations reldec_uid: forall t, fin t -> fin t -> bool :=
+    reldec_uid F1 F1 := true;
+    reldec_uid (FS i) (FS j) := reldec_uid i j;
+    reldec_uid _ _ := false.
+  
+  (** Decidable UIDs *)
+  Global Instance eqdec_uid: RelDec (@eq uid) := {
+      rel_dec a b := @reldec_uid n a b
+    }.
+
+  (** Messages exchagend *)
+  Record Msg := {
       principal: uid;
       payload: bytestring
     }.
 
-    Global Instance eqdec_msg: RelDec (@eq Msg) := {
+  (** Decidable messages *)
+  Global Instance eqdec_msg: RelDec (@eq Msg) := {
       rel_dec m1 m2 := match m1, m2 with
                          {| principal := u1; payload := p1 |},
                          {| principal := u2; payload := p2 |} =>
                            andb (rel_dec u1 u2) (rel_dec p1 p2)
                        end      
     }.
-  
+
+  (** A queue of messages received *)
+  Definition queue := list Msg.
+
+  (** A task is either running or returned *)
+  Inductive Task(E: Type -> Type)(T: Type) :=
+  | Done (r: T)(q: queue)
+  | Running (c: itree E T)(q: queue).
+
+  Definition is_done{E T}(t: Task E T) :=
+    match t with
+    | Done _ _ => true
+    | Running _ _ => false
+    end.
+
+  Definition is_running{E T}(t: Task E T) :=
+    match t with
+    | Done _ _ => false
+    | Running _ _ => true
+    end.
+
+  (** Network effects *)
   Inductive Net: Type -> Type :=
   | Recv: Net Msg 
   | Send : Msg -> Net unit
   | Broadcast: bytestring -> Net unit.
 
-  Definition recv {E} `{Net -< E}: itree E Msg :=
-    embed Recv.
-  
+  Definition recv {E} `{Net -< E}: itree E Msg := embed Recv.
   Definition send {E} `{Net -< E}: Msg -> itree E unit := embed Send.
   Definition broadcast {E} `{Net -< E}: bytestring -> itree E unit := embed Broadcast.
 End Net.
+
 
 Module PKI(S: Systems).
   Import S.
