@@ -42,7 +42,6 @@ Module Network(S: SSystem).
   
   (** Local storage and message passing effects *)
   Notation Sys := (Storage +' Net) (only parsing).
-  
 
   Fixpoint num_done{E A m}(a: vec m (Task E A)): nat :=
     match a with
@@ -71,14 +70,6 @@ Module Network(S: SSystem).
           rewrite IHv; reflexivity.
   Defined.
 
-  Definition to_ret{E A m}(a: vec m (Task E A))
-             {H: num_running a = 0}: vec m (A * queue).
-    dependent induction a.
-    - exact [].
-    - destruct h; cbn in *.
-      + exact ((r, q) :: IHa H).
-      + inversion H.
-  Defined.
 
   Equations absolute_idx{E A m}(v: vec m (Task E A))(i: fin (num_running v)): (fin m * itree E A * queue) :=
     absolute_idx ((Running _ _) :: ts) (FS k) :=
@@ -90,6 +81,15 @@ Module Network(S: SSystem).
       | (i, a, q) => (FS i, a, q)
       end;
     absolute_idx ((Running a q) :: ts) F1 := (F1, a ,q).
+
+  Definition schedule_network_0{E A m}(a: vec m (Task E A))
+             {H: num_running a = 0}: vec m (A * queue).
+    dependent induction a.
+    - exact [].
+    - destruct h; cbn in *.
+      + exact ((r, q) :: IHa H).
+      + inversion H.
+  Defined.
 
   (** Messaging scheduler (Send, Receive, Broadcast *)
   Equations schedule_network_Sn {R: Type}
@@ -155,13 +155,11 @@ Module Network(S: SSystem).
                         CTrees.ctree void1 (vec n (R * queue)))
              (sys: vec n (Task Net R)): CTrees.ctree void1 (vec n (R * queue)).
     destruct (num_running sys) eqn:Hnr.
-    - refine (CTrees.Ret (to_ret sys)); assumption.
+    - refine (CTrees.Ret (schedule_network_0 sys)); assumption.
     - refine (schedule_network_Sn schedule sys); exists n0; assumption.
   Defined.
 
   CoFixpoint schedule {R: Type} := @schedule_network R schedule.
 
-  Print schedule.
-  
 End Network.
 
