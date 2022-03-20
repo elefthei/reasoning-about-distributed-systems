@@ -5,7 +5,11 @@ From ITree Require Import
 From CTree Require
      CTrees.
 
+From Coinduction Require Import
+     coinduction rel tactics.
+
 From CTree Require Import
+     Equ
      Utils.
 
 From ExtLib Require Import
@@ -40,6 +44,8 @@ Module Network(S: Systems).
   Module Messaging := Messaging(S).
   Module Storage := Storage(S).
   Export Monads Storage Messaging S.
+
+  Notation system n R := (vec n (Task n (@Net n) R)).
 
   Fixpoint num_done{E A m n}(a: vec m (Task n E A)): nat :=
     match a with
@@ -89,9 +95,9 @@ Module Network(S: Systems).
   Defined.
 
   Equations schedule_network{R: Type}{n: nat}
-             (schedule: vec n (Task n (@Net n) R) ->
+             (schedule: system n R ->
                         CTrees.ctree void1 (vec n (R * queue n)))
-             (sys: vec n (Task n (@Net n) R)):
+             (sys: system n R):
     CTrees.ctree void1 (vec n (R * queue n)) :=
     schedule_network schedule sys :=
       match num_running sys as n1 return (num_running sys = n1 -> CTrees.ctree void1 (vec n (R * queue n))) with
@@ -101,10 +107,9 @@ Module Network(S: Systems).
             (** Non-det pick an agent that is running to execute *)
             r <- choice true (num_running sys) ;;
             (** q: the message queue of i *)
-            let (p, q) := get_running sys r in
             (** i: The absolute index of a running agent `r`
                 a: The itree of agent `i` (Running)        *)    
-            let (i, a) := p in
+            let '(i, a, q) := get_running sys r in
             (** Observe the itree `a` *)
             match observe a with
             | RetF v =>
@@ -148,17 +153,21 @@ Module Network(S: Systems).
           *)
             end
       end eq_refl.
-      
+
+  Transparent schedule_network.
+
   CoFixpoint schedule {R: Type}{n: nat} := @schedule_network R n schedule.
 
-  
+  Lemma rewrite_schedule: forall n R (s: system n R), schedule s ≅ schedule_network schedule s.
+  Proof.
+    intros; step; auto.
+  Qed.
+
   (** Evaluates Net *)
   Definition run_network{R m}(a: stateT heap (fun T => vec m (itree (@Net m) T)) R):
     stateT heap (fun T => (CTrees.ctree void1 (vec m T))) (R * queue m) :=
     fun st => (** Need to change the associativity on tuples here, TODO: fix if possible *)
-      CTrees.CTree.map (Vector.map (fun triple => match triple with
-                                                  | (h, r, q) => (h, (r, q))
-                                                  end))
+      CTrees.CTree.map (Vector.map (fun '(h, r, q) => (h, (r, q))))
                        (schedule (Vector.map (fun it =>
                                                 Running it List.nil) (a st))).
 End Network.
