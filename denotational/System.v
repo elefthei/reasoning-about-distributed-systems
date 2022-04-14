@@ -3,16 +3,17 @@ From Coq Require Import
      Fin
      Relations.
 
-From ITree Require Import
-     ITree
-     Events.State
-     Events.StateFacts.
-
 From Equations Require Import Equations.
 
+From ITree Require Import
+     Indexed.Sum
+     Subevent.
+
 From CTree Require Import
-     CTrees.
-     
+     CTree
+     Core.Utils
+     Interp.State.
+
 From ExtLib Require Import
      Maps
      FMapAList
@@ -22,15 +23,12 @@ From ExtLib Require Import
 
 From DSL Require Import Vectors.
 
-Import ITreeNotations.
 Import MonadNotation.
 Local Open Scope monad_scope.
 Local Open Scope string_scope.
 
 Set Implicit Arguments.
 Set Contextual Implicit.
-
-Notation fin := t.
 
 (** Some general Sets needed for Systems work *)
 Module Type Systems.
@@ -62,7 +60,7 @@ Module DistrSystem <: Systems.
 
   Definition uid_coerce t (a: uid t) := id a.
   Definition fin_coerce t (a: fin t) := id a.
-  
+
   Equations reldec_uid: forall t, fin t -> fin t -> bool :=
     reldec_uid F1 F1 := true;
     reldec_uid (FS i) (FS j) := reldec_uid i j;
@@ -109,31 +107,41 @@ Module Messaging(S: Systems).
   (** A task is either running or returned *)
   Inductive Task t (E: Type -> Type)(T: Type) :=
   | Done (r: T)(q: queue t)
-  | Running (c: itree E T)(q: queue t).
+  | Running (c: ctree E T)(q: queue t)
+  | Blocked (c: ctree E T)(q: queue t).
 
-  Definition is_done{E T n}(t: Task n E T) :=
-    match t with
-    | Done _ _ => true
-    | Running _ _ => false
+  (** Network effects *)
+  Inductive Net(n: nat): Type -> Type :=
+  | Recv: Net n (Msg n)
+  | Send : (Msg n) -> Net n unit
+  | Broadcast: bytestring -> Net n unit.
+
+  Arguments Send {n}.
+  Arguments Recv {n}.
+  Arguments Broadcast {n}.
+  
+  Definition recv {E n} `{Net n -< E}: ctree E (Msg n) := trigger Recv.
+  Definition send {E n} `{Net n -< E}: Msg n -> ctree E unit :=
+    fun m => trigger (Send m).
+  Definition broadcast {E n} `{Net n -< E}: bytestring -> ctree E unit :=
+    fun bs => trigger (Broadcast bs).
+
+  Fixpoint num_done{E A m n}(a: vec m (Task n (Net n +' E) A)): nat :=
+    match a with
+    | ((Done _ _) :: ts) => S (num_done ts)
+    | ((Running _ _) :: ts) => num_done ts
+    | ((Blocked _ _) :: ts) => num_done ts
+    | [] => 0
     end.
 
-  Definition is_running{E T n}(t: Task n E T) :=
-    match t with
-    | Done _ _ => false
-    | Running _ _ => true
+  Fixpoint num_running{E A m n}(a: vec m (Task n E A)): nat :=
+    match a with
+    | ((Done _ _) :: ts) => num_running ts
+    | ((Running _ _) :: ts) => S (num_running ts)
+    | ((Blocked _ _) :: ts) => num_running ts
+    | [] => 0
     end.
   
-  (** Network effects *)
-  Inductive Net{n: nat}: Type -> Type :=
-  | Recv: Net (Msg n)
-  | Send : (Msg n) -> Net unit
-  | Broadcast: bytestring -> Net unit.
-
-  Definition recv {E n} `{Net -< E}: itree E (Msg n) := embed Recv.
-  Definition send {E n} `{Net -< E}: Msg n -> itree E unit := embed Send.
-  Definition broadcast {E n} `{Net -< E}: bytestring -> itree E unit :=
-    embed (@Broadcast n).
-
 End Messaging.
 
 Module PKI(S: Systems).
@@ -161,18 +169,19 @@ Module Spawn(S: Systems).
   Import S.
 
   Inductive spawnE E : Type -> Type :=
-  | Spawn : forall T (c: channel T) (t: itree (spawnE E +' E) T), spawnE E (channel T)
+  | Spawn : forall T (c: channel T) (t: ctree (spawnE E +' E) T), spawnE E (channel T)
   | Make: forall (T: Type), spawnE E (channel T)
   | Block: forall T (c: channel T), spawnE E T.
 
-  Definition spawn {F E T} `{(spawnE F) -< E} (c: channel T)(t:itree (spawnE F +' F) T) :=
-    ITree.trigger (@Spawn F T c t).
+  Definition spawn {F E T} `{(spawnE F) -< E} (c: channel T)(t:ctree (spawnE F +' F) T) :=
+    trigger (@Spawn F T c t).
   
   Definition make {F E T} `{(spawnE F) -< E} :=
-    ITree.trigger (@Make F T).
+    trigger (@Make F T).
   
   Definition block {F E} `{(spawnE F) -< E} {t} (c: channel t) :=
-    ITree.trigger (@Block F t c).
+    trigger (@Block F t c).
+  
 End Spawn.  
 
 Module Storage(S: Systems).
@@ -183,16 +192,16 @@ Module Storage(S: Systems).
   
   Notation heap := (alist var bytestring).
   Notation Storage := (stateE heap).
-  
-  Definition load {E} `{Storage -< E}(v: var): itree E (option bytestring) :=
+
+  Definition load {E} `{stateE heap -< E}(v: var): ctree E (option bytestring) :=
     get >>= fun s => ret (lookup v s).
 
-  Definition store {E} `{Storage -< E}(v: var)(b: bytestring): itree E unit :=
+  Definition store {E} `{Storage -< E}(v: var)(b: bytestring): ctree E unit :=
     get >>= fun s => put (add v b s).
 
-    (** Evaluates, takes a single heap for all agents *)
-  Definition run_storage{E R m}(a: vec m (itree (Storage +' E) R)):
-    stateT heap (fun T => vec m (itree E T)) R :=
+  (** Evaluates, takes a single heap for all agents *)
+  Definition run_storage{E R m}(a: vec m (ctree (Storage +' E) R)):
+    stateT heap (fun T => vec m (ctree E T)) R :=
     fun st => Vector.map (fun it => run_state it st) a.
 
 End Storage.  
