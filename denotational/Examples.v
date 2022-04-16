@@ -83,7 +83,7 @@ Module Examples.
   Typeclasses eauto := 6.
 
   Ltac fold_bind :=
-    repeat lazymatch goal with
+    lazymatch goal with
            | [ |- sbisim _ (CTree.subst ?k ?t) ] => fold (CTree.bind t k)
            | [ H: context[CTree.subst ?f ?x] |- _ ] => fold (CTree.bind x f) in H
            | [ |- context[CTree.subst ?f ?x] ] => fold (CTree.bind x f) in *
@@ -127,108 +127,57 @@ Module Examples.
     end; cbn.
 
   (** LEF: It folds ~ to `sb bot` must figure out why *)
-  Ltac sb_fwd :=
-    repeat (cbn; lazymatch goal with
-                 | [ |- sbisim (CTree.bind ?t _) (CTree.bind ?t _) ] => apply bind_sbisim_cong
-                 | [ |- sbisim (ChoiceV ?n _) (ChoiceV ?n _) ] => eapply sb_choiceV_id; intros
-                 | [ |- sbisim (ChoiceI ?n _) (ChoiceI ?n _) ] => eapply sb_choiceI_id; intros
-                 | [ |- sbisim (Ret ?x) (Ret ?x) ] => apply reflexivity
+
+
+  Ltac sb_fwd_I := setoid_rewrite ctree_eta;
+    repeat (cbn; multimatch goal with
+                 | [ |- sbisim (CTree.bind ?t _) (CTree.bind ?t _) ] =>
+                     apply sbisim_clo_bind
+              
+                 | [ |- sbisim (Ret _) (Ret _) ] => apply sb_ret
                  | [ |- context[sbisim (TauI _) _] ] => rewrite !sb_tauI
+
                  | [ |- context[CTree.bind (Ret _) _] ] => rewrite ?bind_ret_l
                  | [ |- context[CTree.bind (CTree.bind _ _) _]] => rewrite ?bind_bind
-           end; fold_bind).
+                 | [ x: fin _ |- _] => dependent destruction x; subst
+                 | [ |- context[ChoiceI 1 _]] => rewrite sb_choiceI1
+                 | [ |- sbisim (ChoiceI ?n _) ?R ] =>
+                     lazymatch R with
+                     | ChoiceI ?n _ => apply sb_choiceI_id; intros
+                     | ChoiceV _ _ => fail "Canot unify visible and invisilble states"
+                     | _ => rewrite sb_choiceI_idempotent; intros
+                     end
+                 (** Symmetric patterns *)
+                 | [ |- sbisim ?L (ChoiceI ?n _) ] =>
+                     lazymatch L with
+                     | ChoiceI ?n _ => apply sb_choiceI_id; intros
+                     | ChoiceV _ _ => fail "Canot unify visible and invisilble states"
+                     | _ => rewrite sb_choiceI_idempotent; intros
+                     end
+           end; idtac "."; repeat fold_bind).
 
   Transparent schedule_one.
   Transparent schedule_network_0.
   Transparent get_running.
   Transparent vector_replace.
 
+  Definition final_heap1: heap := List.cons ("b", 1) (List.cons ("a", 0)   List.nil).
+  Definition final_heap2: heap := List.cons ("a", 0) List.nil.
+  Lemma left_tree_simpl: C1 ~ Ret (Some
+                                     [(final_heap1, tt, List.nil); (final_heap2, tt, List.nil)]). 
+  Proof.
+    unfold final_heap1, final_heap2, init_heap.
 
-
+    repeat (sb_fwd_I; try reflexivity).
+  Qed.
+    
   Lemma sb_c1_c2: C1 ~ C2.
   Proof.
+    rewrite left_tree_simpl.
     unfold C1, C2, init_heap.
-    (** 
-    setoid_rewrite ctree_eta; sb_fwd. 
-    destruct (fin_case t); intros; subst; simplify_ds.
-    - intro t; destruct (fin_case t); subst; simplify_ds.
-      simp vector_replace.
-      sb_fwd.
-      + simp get_running.
-    *)
+    time repeat (sb_fwd_I; try reflexivity).
+    (**  Takes 6035.167 secs ~ 1.7h *)
+  Qed.
     
-    setoid_rewrite ctree_eta; cbn.
-    
-    eapply sb_choiceI_id; intros; fold_bind; rewrite !bind_ret_l;
-      (** x: fin 2 can be either 1 or 2 *)
-      destruct (fin_case x); subst.
-    
-    - cbn; rewrite !sb_tauI;
-      setoid_rewrite ctree_eta; cbn;
-        eapply sb_choiceI_id; intros; fold_bind; rewrite !bind_ret_l;
-        destruct (fin_case x); subst; cbn.
-      
-      * cbn; rewrite !sb_tauI; 
-        setoid_rewrite ctree_eta; cbn;
-          eapply sb_choiceI_id; intros; fold_bind; rewrite !bind_ret_l;
-          destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-
-        + cbn; rewrite !sb_tauI;
-            setoid_rewrite ctree_eta; cbn;
-            eapply sb_choiceI_id; intros; fold_bind; rewrite !bind_ret_l;
-            destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-          
-          -- cbn; rewrite !sb_tauI;
-               setoid_rewrite ctree_eta; cbn;
-               eapply sb_choiceI_id; intros; fold_bind; rewrite !bind_ret_l;
-               destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-             
-             **  cbn; rewrite !sb_tauI;
-                   setoid_rewrite ctree_eta; cbn; setoid_rewrite bind_ret_l;
-                   fold_bind; cbn; rewrite sb_choiceI1.
-                 
-                 (** Left is DONE -- Choice1 on the right *)
-                 cbn; rewrite sb_tauI; 
-                   setoid_rewrite ctree_eta; cbn;
-                   rewrite sb_choiceI1; cbn; fold_bind; rewrite !bind_ret_l; cbn.
-                 
-                 rewrite !sb_tauI;
-                   setoid_rewrite ctree_eta; cbn;
-                   apply sb_choiceI_r; intros; fold_bind; rewrite ?bind_ret_l;
-                   destruct (fin_case x); subst.
-                 
-                 ++ cbn; rewrite !sb_tauI;
-                      setoid_rewrite ctree_eta; cbn;
-                      apply sb_choiceI_l; intros; fold_bind; rewrite !bind_ret_l;
-                      destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-                    
-                    --- cbn; rewrite !sb_tauI;
-                          setoid_rewrite ctree_eta; cbn;
-                          eapply sb_choiceI_l; intros; fold_bind; rewrite !bind_ret_l;
-                          destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-                        
-                         *** cbn; rewrite !sb_tauI;
-                               setoid_rewrite ctree_eta; cbn;
-                               eapply sb_choiceI_l; intros; fold_bind; rewrite !bind_ret_l;
-                               destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-                             
-                             +++ cbn; rewrite !sb_tauI;
-                                   setoid_rewrite ctree_eta; cbn;
-                                   eapply sb_choiceI_l; intros; fold_bind; rewrite !bind_ret_l;
-                                   destruct (fin_case x); subst; cbn; rewrite ?bind_ret_l.
-                                 
-                                 ---- cbn; rewrite !sb_tauI;
-                                     setoid_rewrite ctree_eta; cbn;
-                                        rewrite sb_choiceI1; intros; fold_bind; rewrite !bind_ret_l; cbn.
-                                      
-                                      rewrite sb_tauI; setoid_rewrite ctree_eta; cbn;
-                                        rewrite sb_choiceI1; intros; fold_bind; rewrite !bind_ret_l; cbn.
-                                      
-                                      rewrite sb_tauI;  setoid_rewrite ctree_eta; cbn.
-                                   (** And finally, the states are equal! *)
-                                   reflexivity.
-           
-  Admitted.
-
 End Examples.
     
