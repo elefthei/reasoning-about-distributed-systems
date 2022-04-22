@@ -40,7 +40,7 @@ Module Logic.
   | AndL: CTL s -> CTL s -> CTL s
   | OrL: CTL s -> CTL s -> CTL s.
 
-  CoInductive _entails {t}: ctree' void1 t -> CTL t -> Prop :=
+  Inductive _entails {t}: ctree' void1 t -> CTL t -> Prop :=
   | RetRet: forall (p: t -> Prop) x,
       p x -> _entails (RetF x) (RetL p)
   |ChoiceRet:
@@ -124,25 +124,21 @@ Module Logic.
                                   P custom hprop,
                                   Q custom hprop at level 40).
 
-  (** Example *)
-  Definition f: CTL (nat * unit) := <[ exists n |- fst n = 3 ]>.
-  Print choiceV2.
-
-  Typeclasses eauto := 4.
+  (** Example 1 *)
+  Definition f: CTL (nat * unit) := <[ exists n |- fst n = 1 ]>.
   Definition t: ctree (stateE nat +' void1) unit :=
     s <- get;;
-    choiceV2 (put 3) (put 2).
+    choiceV2 (put 0) (put (S s));;
+    y <- get ;;
+    choiceV2 (put (S y)) (put (S (S y))).
 
-  Definition b := (run_state t 0).
-  Lemma ex: (b |= f).
-    cbn.
-    econstructor; econstructor.
-    - econstructor.
-    - cbn; econstructor.
-      exists (F1).
-      repeat (cbn; econstructor).
+  Lemma ex: (run_state t 0 |= f).
+    repeat (cbn; econstructor; try exists F1).
   Defined.
 
+
+  
+  
 End Logic.
 
 
