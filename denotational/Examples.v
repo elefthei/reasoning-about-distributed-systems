@@ -80,6 +80,8 @@ Module Examples.
   Definition C1 := run_network (map voidR (run_storage [example; example_skip] init_heap)).
   Definition C2 := run_network (map voidR (run_storage [example_alice; example_bob] init_heap)).
 
+  Check (run_storage [example] init_heap).
+  
   Typeclasses eauto := 6.
 
   Ltac fold_bind :=
