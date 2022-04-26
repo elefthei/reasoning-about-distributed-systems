@@ -11,6 +11,8 @@ From ITree Require Import
 
 From CTree Require Import
      CTree
+     Equ
+     SBisim
      Core.Utils
      Interp.State.
 
@@ -21,9 +23,12 @@ From ExtLib Require Import
      String
      Monad.
 
+From Coinduction Require Import
+     coinduction rel tactics.
+
 From DSL Require Import Vectors.
 
-Import MonadNotation.
+Import MonadNotation EquNotations SBisimNotations.
 Local Open Scope monad_scope.
 Local Open Scope string_scope.
 
@@ -58,8 +63,8 @@ Module DistrSystem <: Systems.
   
   Definition uid := fin.
 
-  Definition uid_coerce t (a: uid t) := id a.
-  Definition fin_coerce t (a: fin t) := id a.
+  Definition uid_coerce t (a: uid t) := a.
+  Definition fin_coerce t (a: fin t) := a.
 
   Equations reldec_uid: forall t, fin t -> fin t -> bool :=
     reldec_uid F1 F1 := true;
@@ -101,7 +106,7 @@ Module Messaging(S: Systems).
                        end      
     }.
 
-  (** A queue of messages received *)
+  (** A queue of messages *)
   Definition queue t := list (Msg t).
 
   (** A task is either running or returned *)
@@ -203,8 +208,30 @@ Module Storage(S: Systems).
   Definition run_storage{E R m}(a: vec m (ctree (Storage +' E) R)):
     stateT heap (fun T => vec m (ctree E T)) R :=
     fun st => Vector.map (fun it => run_state it st) a.
-
+  
 End Storage.
 
+Module DistributedSystems(S: Systems).
+  Module St := Storage(S).
+  Module Mg := Messaging(S).
+  Import S Monads St Mg.
 
+  Variable (n: nat).
+  Definition proc := ctree (Net n +' Storage) void.
 
+  Definition mkproc{R}(t: ctree (Net n +' Storage) R): proc :=
+    CTree.iter (fun _ : unit =>
+            _ <- t ;;
+            Ret (@inl unit void tt))
+         tt.
+
+  Lemma proc_noret: forall (p: proc) x,
+      not (p ≅ Ret x).
+    intros _ [].
+  Defined.
+
+  Lemma mkproc_noret: forall R (t: ctree (Net n +' Storage) R) x,
+      not (@mkproc R t ≅ Ret x).
+    intros _ _ [].
+  Defined.
+End DistributedSystems.  

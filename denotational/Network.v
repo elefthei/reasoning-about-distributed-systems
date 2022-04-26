@@ -5,7 +5,8 @@ From ITree Require Import
 From CTree Require Import
      CTree
      Interp.Interp
-     Eq.Equ
+     Equ
+     SBisim
      Core.Utils.
 
 From ExtLib Require Import
@@ -17,6 +18,9 @@ From Coq Require Import
      Vector     
      Fin (* fin definition here *)
      Program.Equality
+     Program.Basics
+     Classes.Morphisms
+     Classes.RelationClasses
      Lia.
 
 From Equations Require Import
@@ -25,13 +29,17 @@ From Equations Require Import
 From DSL Require Import
      System
      Utils
-     Vectors.
+     Vectors
+     Ltac.
 
 From Coinduction Require Import
      rel coinduction tactics.
 
 Import EquNotations.
 Import MonadNotation.
+Import ProperNotations.
+Import SBisimNotations.
+
 Local Open Scope monad_scope.
 Local Open Scope vector_scope.
 Local Open Scope fin_vector_scope.
@@ -163,8 +171,29 @@ Module Network(S: Systems).
     eauto.
   Qed.
 
+  Typeclasses eauto := 6.
+
+  Transparent schedule.
+  Transparent schedule_one.
+  Transparent schedule_network_0.
+  Transparent get_running.
+  Transparent vector_replace.
+
   (** Evaluates Net *)
   Definition run_network{E R n} (s: InitSys n (Net n +' E) R): SysTree n E R :=
     schedule (Vector.map (fun it => Running it List.nil) s).
-  
+
+  #[global] Instance sbisim_clos_network_goal{n E R}:
+    Proper (sbisim ==> eq ==> sbisim) (fun h ts => @run_network E R (S n) (h :: ts)).
+  Proof.
+    unfold Proper, respectful, run_network.
+    intros x y Hxy nx ny Hn.
+    cbn.
+    remember (map (fun it : ctree (Net (S n) +' E) R => Running it Datatypes.nil) nx) as netx.
+    remember (map (fun it : ctree (Net (S n) +' E) R => Running it Datatypes.nil) ny) as nety.
+    eapply transitivity with (y:=schedule_one schedule (Running x List.nil :: netx) (F1)); cbn.
+    - desobs x.
+      cbn.
+  Admitted.
+
 End Network.

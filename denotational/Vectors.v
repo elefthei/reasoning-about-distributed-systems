@@ -3,7 +3,10 @@ From Coq Require Import
      Fin
      Program.Equality.
 
-From Coq Require List.
+From Coq Require
+     List.
+
+From CTree Require Import Core.Utils.
 
 From Equations Require Import Equations.
 
@@ -55,3 +58,38 @@ Proof.
         apply andb_true_intro; split; assumption.
 Defined.
 
+
+Fixpoint fin_all (n : nat) : list (fin n) :=
+  match n as n return list (fin n) with
+  | 0 => List.nil
+  | S n => List.cons (@F1 n) (List.map (@FS _) (fin_all n))
+  end%list.
+
+Theorem fin_all_In : forall {n} (f : fin n),
+    List.In f (fin_all n).
+Proof.
+  induction n; intros.
+  inversion f.
+  remember (S n). destruct f.
+  simpl; firstorder.
+  inversion Heqn0. subst.
+  simpl. right. apply List.in_map. auto.
+Qed.
+
+Theorem fin_case : forall n (f : fin (S n)),
+    f = F1 \/ exists f', f = FS f'.
+Proof.
+  intros. generalize (fin_all_In f). intros.
+  destruct H; auto.
+  eapply List.in_map_iff in H. right. destruct H.
+  exists x. intuition.
+Qed.
+
+Fixpoint zip {A B : Type} {n : nat} (a : Vector.t A n) (b : Vector.t B n) : Vector.t (A * B) n :=
+  match a in Vector.t _ n return Vector.t B n -> Vector.t (A * B) n  with
+  | ha :: ta => fun b => (ha, Vector.hd b) :: zip ta (Vector.tl b)
+  | [] => fun _ => []
+  end b.
+
+Definition pairwise{A B n}(R: rel A B): rel (vec n A) (vec n B) :=
+  fun a b => @Forall (A * B) (fun '(a, b) => R a b) n (zip a b).

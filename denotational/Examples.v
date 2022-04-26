@@ -82,95 +82,29 @@ Module Examples.
 
   Check (run_storage [example] init_heap).
   
-  Typeclasses eauto := 6.
-
-  Ltac fold_bind :=
-    lazymatch goal with
-           | [ |- sbisim _ (CTree.subst ?k ?t) ] => fold (CTree.bind t k)
-           | [ H: context[CTree.subst ?f ?x] |- _ ] => fold (CTree.bind x f) in H
-           | [ |- context[CTree.subst ?f ?x] ] => fold (CTree.bind x f) in *
-           end.
-
-  Fixpoint fin_all (n : nat) : list (fin n) :=
-    match n as n return list (fin n) with
-    | 0 => List.nil
-    | S n => List.cons (@F1 n) (List.map (@FS _) (fin_all n))
-    end%list.
-  
-  Theorem fin_all_In : forall {n} (f : fin n),
-      List.In f (fin_all n).
-  Proof.
-    induction n; intros.
-    inversion f.
-    remember (S n). destruct f.
-    simpl; firstorder.
-    inversion Heqn0. subst.
-    simpl. right. apply List.in_map. auto.
-  Qed.
-
-  Theorem fin_case : forall n (f : fin (S n)),
-      f = F1 \/ exists f', f = FS f'.
-  Proof.
-    intros. generalize (fin_all_In f). intros.
-    destruct H; auto.
-    eapply List.in_map_iff in H. right. destruct H.
-    exists x. intuition.
-  Qed.
-
-  (** Main lemma, C1 is bisimilar to C2 *)
-  Ltac simplify_ds :=
-    repeat lazymatch goal with
-    | [ H: context[schedule_one] |- _] => simp schedule_one in H
-    | [ H: context[get_running] |- _] => simp get_running in H
-    | [ H: context[vector_replace] |- _] => simp vector_replace in H
-    | [ |- context[schedule_one] ] => simp schedule_one
-    | [ |- context[get_running] ] => simp get_running
-    | [ |- context[vector_replace] ] => simp vector_replace
-    end; cbn.
-
-  (** LEF: It folds ~ to `sb bot` must figure out why *)
-
-
-  Ltac sb_fwd_I := setoid_rewrite ctree_eta;
-    repeat (cbn; multimatch goal with
-                 | [ |- sbisim (CTree.bind ?t _) (CTree.bind ?t _) ] =>
-                     apply sbisim_clo_bind
-              
-                 | [ |- sbisim (Ret _) (Ret _) ] => apply sb_ret
-                 | [ |- context[sbisim (TauI _) _] ] => rewrite !sb_tauI
-
-                 | [ |- context[CTree.bind (Ret _) _] ] => rewrite ?bind_ret_l
-                 | [ |- context[CTree.bind (CTree.bind _ _) _]] => rewrite ?bind_bind
-                 | [ x: fin _ |- _] => dependent destruction x; subst
-                 | [ |- context[ChoiceI 1 _]] => rewrite sb_choiceI1
-                 | [ |- sbisim (ChoiceI ?n _) ?R ] =>
-                     lazymatch R with
-                     | ChoiceI ?n _ => apply sb_choiceI_id; intros
-                     | ChoiceV _ _ => fail "Canot unify visible and invisilble states"
-                     | _ => rewrite sb_choiceI_idempotent; intros
-                     end
-                 (** Symmetric patterns *)
-                 | [ |- sbisim ?L (ChoiceI ?n _) ] =>
-                     lazymatch L with
-                     | ChoiceI ?n _ => apply sb_choiceI_id; intros
-                     | ChoiceV _ _ => fail "Canot unify visible and invisilble states"
-                     | _ => rewrite sb_choiceI_idempotent; intros
-                     end
-           end; idtac "."; repeat fold_bind).
-
-  Transparent schedule_one.
-  Transparent schedule_network_0.
-  Transparent get_running.
-  Transparent vector_replace.
 
   Definition final_heap1: heap := List.cons ("b", 1) (List.cons ("a", 0)   List.nil).
   Definition final_heap2: heap := List.cons ("a", 0) List.nil.
+
   Lemma left_tree_simpl: C1 ~ Ret (Some
                                      [(final_heap1, tt, List.nil); (final_heap2, tt, List.nil)]). 
   Proof.
-    unfold final_heap1, final_heap2, init_heap.
-
-    repeat (sb_fwd_I; try reflexivity).
+    unfold C1, final_heap1, final_heap2, init_heap, run_storage.
+    rewrite Vector.map_map.
+    cbn.
+    unfold run_state.
+    Search interp_state.
+    s
+    rewrite interp_state_bind.
+    cbn.
+    replace (map voidR (run_storage [example; example_skip] init_heap)) with
+      ([run_storage example init_heap; run_storage example_skip init_heap]).
+        
+    Search map.
+    
+    sb_fwd_I.
+    Check run_state.
+    time repeat (sb_fwd_I; try reflexivity).
   Qed.
     
   Lemma sb_c1_c2: C1 ~ C2.
