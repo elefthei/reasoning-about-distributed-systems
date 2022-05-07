@@ -7,7 +7,8 @@ From Equations Require Import Equations.
 
 From ITree Require Import
      Indexed.Sum
-     Subevent.
+     Subevent
+     CategoryOps.
 
 From CTree Require Import
      CTree
@@ -33,7 +34,6 @@ Local Open Scope monad_scope.
 Local Open Scope string_scope.
 
 Set Implicit Arguments.
-Set Contextual Implicit.
 
 (** Some general Sets needed for Systems work *)
 Module Type Systems.
@@ -91,14 +91,17 @@ End DistrSystem.
 Module Messaging(S: Systems).
   Import S.
 
-   (** Messages exchagend *)
-  Record Msg t := {
-      principal: uid t;
-      payload: bytestring
-    }.
+  Section ParametricN.
+    Variable (n: nat).
 
-  (** Decidable messages *)
-  Global Instance eqdec_msg: forall t, RelDec (@eq (Msg t)) := {
+    (** Messages exchagend *)
+    Record Msg := {
+        principal: uid n;
+        payload: bytestring
+      }.
+
+    (** Decidable messages *)
+    Global Instance eqdec_msg: RelDec (@eq Msg) := {
       rel_dec m1 m2 := match m1, m2 with
                          {| principal := u1; payload := p1 |},
                          {| principal := u2; payload := p2 |} =>
@@ -106,47 +109,35 @@ Module Messaging(S: Systems).
                        end      
     }.
 
-  (** A queue of messages *)
-  Definition queue t := list (Msg t).
+    (** A queue of messages *)
+    Definition queue := list Msg.
 
-  (** A task is either running or returned *)
-  Inductive Task t (E: Type -> Type)(T: Type) :=
-  | Done (r: T)(q: queue t)
-  | Running (c: ctree E T)(q: queue t)
-  | Blocked (c: ctree E T)(q: queue t).
+    (** A task is either running or returned *)
+    Inductive Task (E: Type -> Type) :=
+    | Running (c: ctree E void)(q: queue)
+    | Blocked (k: option Msg -> ctree E void).
+    (** this is a "soft" blocked -- the scheduler can pass it "None"
+        which corresponds to a timeout, and it will unblock *)
 
-  (** Network effects *)
-  Inductive Net(n: nat): Type -> Type :=
-  | Recv: Net n (Msg n)
-  | Send : (Msg n) -> Net n unit
-  | Broadcast: bytestring -> Net n unit.
+    (** Network effects *)
+    Inductive Net: Type -> Type :=
+    | Recv: Net (option Msg)
+    | Send : Msg -> Net unit
+    | Broadcast: bytestring -> Net unit.    
+  End ParametricN.
 
+  Arguments Running {n} {E}.
+  Arguments Blocked {n} {E}.
   Arguments Send {n}.
   Arguments Recv {n}.
   Arguments Broadcast {n}.
   
-  Definition recv {E n} `{Net n -< E}: ctree E (Msg n) := trigger Recv.
+  Definition recv {E n} `{Net n -< E}: ctree E (option (Msg n)) := trigger Recv.
   Definition send {E n} `{Net n -< E}: Msg n -> ctree E unit :=
     fun m => trigger (Send m).
   Definition broadcast {E n} `{Net n -< E}: bytestring -> ctree E unit :=
     fun bs => trigger (Broadcast bs).
 
-  Fixpoint num_done{E A m n}(a: vec m (Task n (Net n +' E) A)): nat :=
-    match a with
-    | ((Done _ _) :: ts) => S (num_done ts)
-    | ((Running _ _) :: ts) => num_done ts
-    | ((Blocked _ _) :: ts) => num_done ts
-    | [] => 0
-    end.
-
-  Fixpoint num_running{E A m n}(a: vec m (Task n E A)): nat :=
-    match a with
-    | ((Done _ _) :: ts) => num_running ts
-    | ((Running _ _) :: ts) => S (num_running ts)
-    | ((Blocked _ _) :: ts) => num_running ts
-    | [] => 0
-    end.
-  
 End Messaging.
 
 Module PKI(S: Systems).
@@ -211,27 +202,25 @@ Module Storage(S: Systems).
   
 End Storage.
 
-Module DistributedSystems(S: Systems).
-  Module St := Storage(S).
-  Module Mg := Messaging(S).
-  Import S Monads St Mg.
+Module Log(S: Systems).
+  Import S Monads.
 
-  Variable (n: nat).
-  Definition proc := ctree (Net n +' Storage) void.
+  Inductive logE (S: Type): Type -> Type :=
+  | Log: S -> logE S unit.
 
-  Definition mkproc{R}(t: ctree (Net n +' Storage) R): proc :=
-    CTree.iter (fun _ : unit =>
-            _ <- t ;;
-            Ret (@inl unit void tt))
-         tt.
+  Definition h_state_to_log {E S}: stateE S ~> stateT S (ctree (logE S +' E)) :=
+    fun _ e s =>
+      match e with
+      | Get _ => Ret (s, s)
+      | Put s' => Vis (inl1 (Log s')) (fun _: unit => Ret (s', tt))
+      end.
 
-  Lemma proc_noret: forall (p: proc) x,
-      not (p ≅ Ret x).
-    intros _ [].
-  Defined.
+  Definition pure_state_to_log {S E} : E ~> stateT S (ctree (logE S +' E))
+    := fun _ e s => Vis (inr1 e) (fun x => Ret (s, x)).
 
-  Lemma mkproc_noret: forall R (t: ctree (Net n +' Storage) R) x,
-      not (@mkproc R t ≅ Ret x).
-    intros _ _ [].
-  Defined.
-End DistributedSystems.  
+  Definition run_state {E S}
+    : ctree (stateE S +' E) ~> stateT S (ctree (logE S +' E))
+    := interp_state (case_ h_state_to_log pure_state_to_log).
+
+End Log.
+
