@@ -85,6 +85,11 @@ Proof.
   exists x. intuition.
 Qed.
 
+Lemma vec0 {T}: forall (v:Vector.t T 0), v = [].
+  apply (Vector.case0 (fun x => x=[])).
+  reflexivity.
+Qed.
+
 Fixpoint zip {A B : Type} {n : nat} (a : Vector.t A n) (b : Vector.t B n) : Vector.t (A * B) n :=
   match a in Vector.t _ n return Vector.t B n -> Vector.t (A * B) n  with
   | ha :: ta => fun b => (ha, Vector.hd b) :: zip ta (Vector.tl b)

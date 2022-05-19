@@ -14,7 +14,8 @@ From CTree Require Import
      CTree
      Equ
      SBisim
-     Core.Utils.
+     Core.Utils
+     Interp.State.
 
 From ExtLib Require Import
      Maps
@@ -26,10 +27,7 @@ From ExtLib Require Import
 From Coinduction Require Import
      coinduction rel tactics.
 
-From DSL Require Import
-     Vectors
-     Lists
-     System.
+From DSL Require Import Vectors Lists.
 
 Import MonadNotation EquNotations SBisimNotations.
 Local Open Scope monad_scope.
@@ -37,6 +35,61 @@ Local Open Scope string_scope.
 Local Open Scope fin_vector_scope.
 
 Set Implicit Arguments.
+
+(** Some general Sets needed for Systems work *)
+Module Type Systems.
+
+  Parameter uid: nat -> Set.      (** Principal *)
+  Parameter bytestring: Set.      (** ByteString *)
+  Parameter var : Set.            (** binders *)
+  Parameter channel: Type -> Set. (** Typed channels *)
+  
+  Parameter eqdec_bytestring: RelDec (@eq bytestring).
+  Parameter eqdec_var: RelDec (@eq var).
+  Parameter eqdec_channel: forall T, RelDec (@eq (channel T)).
+  Parameter eqdec_uid: forall t, RelDec (@eq (uid t)).
+  
+  Global Existing Instance eqdec_bytestring.
+  Global Existing Instance eqdec_var.
+  Global Existing Instance eqdec_channel.
+  Global Existing Instance eqdec_uid.
+
+  Parameter uid_coerce: forall t, uid t -> fin t.
+  Global Coercion uid_coerce: uid >-> fin.
+  Parameter fin_coerce: forall t, fin t -> uid t.
+  Global Coercion fin_coerce: fin >-> uid.
+End Systems.
+
+Module DistrSystem <: Systems.
+  
+  Definition uid := fin.
+
+  Definition uid_coerce t (a: uid t) := a.
+  Definition fin_coerce t (a: fin t) := a.
+
+  Equations reldec_uid: forall t, fin t -> fin t -> bool :=
+    reldec_uid F1 F1 := true;
+    reldec_uid (FS i) (FS j) := reldec_uid i j;
+    reldec_uid _ _ := false.
+
+  Transparent reldec_uid.
+  
+  (** Decidable UIDs *)
+  Global Instance eqdec_uid: forall t, RelDec (@eq (uid t)) := {
+      rel_dec a b := @reldec_uid t a b
+    }.
+  
+  Definition bytestring := nat.  
+  Global Instance eqdec_bytestring: RelDec (@eq bytestring) := _.
+  
+  Definition var : Set := string.     (** binders *)
+  Definition channel(T: Type) := nat. (** Typed channels *)
+
+  Definition eqdec_var: RelDec (@eq var) := _.
+  Definition eqdec_channel: forall T, RelDec (@eq (channel T)) :=
+    fun T => _.
+ 
+End DistrSystem.
 
 Module Network(S: Systems).
   Import S.
@@ -182,4 +235,106 @@ Module Network(S: Systems).
   Admitted.
 
 End Network.
+
+Module PKI(S: Systems).
+  Import S.
+  Context {n: nat}.
+
+  Definition Enc (p: uid n) := bytestring.
+  Definition Sig (p: uid n) := bytestring.
+  Definition Pub (p: uid n) := bytestring.
+  Definition Priv (p: uid n) := bytestring.
+  
+  Inductive PKI: Type -> Type :=
+  | EncPub(p: uid n)(k: Pub p)(plain: bytestring): PKI (Enc p)
+  | DecPriv(p: uid n)(k: Priv p)(cipher: Enc p): PKI bytestring
+  | SignPriv(p: uid n)(k: Priv p)(plain: bytestring): PKI (Sig p)
+  | CheckPub(p: uid n)(k: Pub p)(signed: Sig p): PKI bool.
+
+  Definition encrypt {E} `{PKI -< E} := embed EncPub.
+  Definition decrypt {E} `{PKI -< E} := embed DecPriv.
+  Definition sign {E} `{PKI -< E} := embed SignPriv.
+  Definition check {E} `{PKI -< E} := embed CheckPub.
+End PKI.
+
+Module Spawn(S: Systems).
+  Import S.
+
+  Inductive spawnE E : Type -> Type :=
+  | Spawn : forall T (c: channel T) (t: ctree (spawnE E +' E) T), spawnE E (channel T)
+  | Make: forall (T: Type), spawnE E (channel T)
+  | Block: forall T (c: channel T), spawnE E T.
+
+  Definition spawn {F E T} `{(spawnE F) -< E} (c: channel T)(t:ctree (spawnE F +' F) T) :=
+    trigger (@Spawn F T c t).
+  
+  Definition make {F E T} `{(spawnE F) -< E} :=
+    trigger (@Make F T).
+  
+  Definition block {F E} `{(spawnE F) -< E} {t} (c: channel t) :=
+    trigger (@Block F t c).
+  
+End Spawn.  
+
+(** This is not your standard state monad,
+    as daemons do not return, ever. We instead interpret
+    state *changes* as Visible log events. So this is a transformer
+    from stateE S -> logE S *) 
+Module Storage(S: Systems).
+  Import S Monads.
+
+  Notation heap := (alist var bytestring).
+  Notation Storage := (stateE heap).
+  
+  Global Instance Map_heap: Map var bytestring heap := Map_alist eqdec_var bytestring.
+
+  (** Equality of heaps is extensional (functional extensionality)
+      for all keys in either one, values must match *)
+  Global Instance eqdec_heap: RelDec (@eq heap) := {
+      rel_dec a b :=
+      let fix rec (a' b': heap) := 
+        match a' with
+        | ((k, v) :: ts)%list => match alist_find _ k b with
+                        | Some v' => andb (rel_dec v v') (rec ts b')
+                        | None => false
+                        end
+        | nil%list=> true
+        end in
+      andb (rec a b) (rec b a)
+    }.
+  
+  Definition load {E} `{stateE heap -< E}(v: var): ctree E (option bytestring) :=
+    get >>= fun s => ret (lookup v s).
+
+  Definition store {E} `{Storage -< E}(v: var)(b: bytestring): ctree E unit :=
+    get >>= fun s => put (add v b s).
+  
+  Section ParametricS.
+    Context {S: Type} {dec_S: RelDec (@eq S)}.
+
+    Inductive logE (S: Type): Type -> Type :=
+    | Log: S -> logE S unit.
+
+    Definition h_state_to_log {E}: stateE S ~> stateT S (ctree (logE S +' E)) :=
+      fun _ e s =>
+        match e with
+        | Get _ => Ret (s, s)
+        | Put s' => if rel_dec s s' then
+                     Ret (s, tt) else
+                     Vis (inl1 (Log s')) (fun _: unit => Ret (s', tt))
+        end.
+
+    Definition pure_state_to_log {E} : E ~> stateT S (ctree (logE S +' E))
+      := fun _ e s => Vis (inr1 e) (fun x => Ret (s, x)).
+
+    Definition run_state {E}: ctree (stateE S +' E) ~> stateT S (ctree (logE S +' E))
+      := interp_state (case_ h_state_to_log pure_state_to_log).
+
+    Definition run_states {n E R}(v: vec n (ctree (stateE S +' E) R)):
+      stateT S (fun T => vec n (ctree (logE S +' E) T)) R :=
+      fun st => Vector.map (fun a => run_state a st) v.
+    
+  End ParametricS.
+
+End Storage.
 

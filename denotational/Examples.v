@@ -15,7 +15,7 @@ From ExtLib Require Import
      FMapAList
      Reducible
      Traversable
-     Monads
+     Monad
      Option.
 
 From Coinduction Require Import
@@ -31,53 +31,60 @@ From CTree Require Import
 From DSL Require Import
      System
      Network
+     Storage
      Utils
      Vectors.
 
-From Equations Require Import Equations.
-
-Import MonadNotation.
-Local Open Scope monad_scope.
+Import CTreeNotations.
+Local Open Scope ctree_scope.
 Local Open Scope string_scope.
 Local Open Scope vector_scope.
 
 Set Implicit Arguments.
-Set Strict Implicit.
+Set Maximal Implicit Insertion.
 Set Asymmetric Patterns.
 
 Module Examples.
   Module Network := Network(DistrSystem).                               
-  Import Network DistrSystem.
+  Module Storage := Storage(DistrSystem).
+  Import Monads Network Storage DistrSystem.
 
   (** Some uids *)
   Program Definition alice : uid 2 := @of_nat_lt 0 2 _.
   Program Definition bob : uid 2 := @of_nat_lt 1 2 _.
+
+  Definition example_bob: ctree (Storage +' Net 2) void :=
+    daemon (
+        m <- recv ;;
+        match m with
+        | None => ret tt
+        | Some v => send (principal v) (S (payload v))
+        end).
   
-  (** Some programs *)
-  Definition example_alice :=
-    a <- load "a";;
-    send {| principal := bob; payload := default a 0 |};;
-    a' <- recv;;
-    store "b" (payload a').
-
-  Definition example_bob: ctree (Storage +' Net 2) unit :=
-    m <- recv ;;
-    send {| principal := principal m; payload := S (payload m) |}.
-
-  (** A Single agent program *)
-  Definition example: ctree (Storage +' Net 2) unit :=
-    a <- load "a";;
-    store "b" (S (default a 0)).
-
-  Definition example_skip: ctree (Storage +' Net 2) unit :=
-    Ret tt.
+  Definition example_alice: ctree (Storage +' Net 2) void :=
+    daemon (
+        a <- load "a";;
+        send bob (default a 0);;
+        v <- recv;;
+        match v with
+        | None => ret tt
+        | Some v => store "b" (payload v)
+        end).
 
   (** Here we are evaluating two distributed systems to CTrees C1, C2.
       We will show they are equivalent by some sort of Applicative Bisimulation
       using the leaf equivalence below. *) 
- Definition init_heap := (List.cons ("a", 0) List.nil).
+  Definition init_heap := (List.cons ("a", 0) List.nil).
 
-  Definition C1 := run_network (map voidR (run_storage [example; example_skip] init_heap)).
+  Program Definition run{n}(v: vec n (ctree (Storage +' Net n) void)):
+    heap -> ctree (logE heap) (vec n (Task n (logE heap))) :=
+    fun st: heap => run_network (Vector.map swap (run_states v st)).
+    
+    exact (fun st: heap => run_network (X st)).
+    cbn in X.
+    Check run_network.
+    pose proof (fun st: heap => run_network (X st)).
+  Definition C1 := run_network (map voidR (Vector.map run_storage [example; example_skip] init_heap)).
   Definition C2 := run_network (map voidR (run_storage [example_alice; example_bob] init_heap)).
 
   Check (run_storage [example] init_heap).
