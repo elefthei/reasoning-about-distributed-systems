@@ -43,22 +43,15 @@ Module Network(S: Systems).
 
   Section ParametricN.
     Variable (n: nat).
+    (* Variable (msg: Type).
+    Context {eqdec_msg: RelDec (@eq msg)}. *)
 
     (** Messages exchagend *)
     Record Msg := {
         principal: uid n;
-        payload: bytestring
+        payload: msg_type
       }.
 
-    (** Decidable messages *)
-    Global Instance eqdec_msg: RelDec (@eq Msg) := {
-      rel_dec m1 m2 := match m1, m2 with
-                         {| principal := u1; payload := p1 |},
-                         {| principal := u2; payload := p2 |} =>
-                           andb (rel_dec u1 u2) (rel_dec p1 p2)
-                       end      
-    }.
-    
     (** A queue of messages *)
     Definition queue := list Msg.
 
@@ -66,7 +59,7 @@ Module Network(S: Systems).
     Inductive Net: Type -> Type :=
     | Recv: Net (option Msg)
     | Send : Msg -> Net unit
-    | Broadcast: bytestring -> Net unit.
+    | Broadcast: msg_type -> Net unit.
     
     (** A task is either running or returned *)
     Inductive Task (E: Type -> Type) :=
@@ -82,26 +75,26 @@ Module Network(S: Systems).
   Arguments Send {n}.
   Arguments Recv {n}.
   Arguments Broadcast {n}.
-  
+
   Definition recv {n E} `{Net n -< E}: ctree E (option (Msg n)) := trigger Recv.
-  Definition send {n E} `{Net n -< E}: uid n -> bytestring -> ctree E unit :=
+  Definition send {n E} `{Net n -< E}: uid n -> msg_type -> ctree E unit :=
     fun u p => trigger (Send {| principal := u; payload := p |}).
-  Definition broadcast {n E} `{Net n -< E}: bytestring -> ctree E unit :=
+  Definition broadcast {n E} `{Net n -< E}: msg_type -> ctree E unit :=
     fun bs => trigger (Broadcast bs).
 
+  (** A process running forever *)
   Notation daemon t := (@CTree.forever _ _ void t).
-
   
   Notation Sys n E := (vec n (Task n E)) (only parsing).
 
   Equations schedule_one{E: Type -> Type}{n: nat}
-            (schedule: Sys n (Net n +' E) -> ctree E (Sys n E))
-            (sys: Sys n (Net n +' E)) (r: fin n): ctree E (Sys n E) :=
+            (schedule: Sys n (Net n +' E) -> ctree E void)
+            (sys: Sys n (Net n +' E)) (r: fin n): ctree E void :=
     schedule_one schedule sys r with sys $ r => {
         schedule_one _ _ _ (Running a q) with observe a => {
           (** A previous choice, traverse it *)
-          schedule_one _ _ _ _ (ChoiceF b n' k) :=
-          Choice b n' (fun i' => schedule (sys @ r := Running (k i') q));
+          schedule_one _ _ _ _ (BrF b n' k) :=
+          Br b n' (fun i' => schedule (sys @ r := Running (k i') q));
           
           (** A network `send` effect, interpet it! *)
           schedule_one _ _ _ _ (VisF (inl1 (Send m)) k) :=
@@ -110,10 +103,10 @@ Module Network(S: Systems).
           match sys $ principal m with
           | Running a' q' =>  
               (** Deliver to running *)
-              TauI (schedule (sys' @ (principal m) := Running a' (List.cons msg' q')))
+              Guard (schedule (sys' @ (principal m) := Running a' (List.cons msg' q')))
           | Blocked kk => 
               (** Deliver to blocked processes and unblock them *)
-              TauI (schedule (sys' @ (principal m) := Running (kk (Some msg')) List.nil))
+              Guard (schedule (sys' @ (principal m) := Running (kk (Some msg')) List.nil))
           end;
 
           (** Receive a message *)
@@ -122,10 +115,10 @@ Module Network(S: Systems).
             match last q with
             | Some msg =>
                 (** Pop the msg from the end *)
-                TauI (schedule (sys @ r := Running (k (Some msg)) (init q)))
+                Guard (schedule (sys @ r := Running (k (Some msg)) (init q)))
             | None =>
                 (** Becomes blocked if no messages in q *)
-                TauI (schedule (sys @ r := Blocked k))
+                Guard (schedule (sys @ r := Blocked k))
             end;
 
           (** Broadcast a message to everyone *)
@@ -135,21 +128,22 @@ Module Network(S: Systems).
                                    | Running a q => Running a (List.cons msg q)
                                    | Blocked kk => Running (kk (Some msg)) List.nil
                                    end) sys in 
-            TauI (schedule (sys' @ r := Running (k tt) q));
+            Guard (schedule (sys' @ r := Running (k tt) q));
           
           (** Some other downstream effect, trigger *)
           schedule_one _ _ _ _ (VisF (inr1 e) k) :=
-            TauI (schedule (sys @ r := Running (trigger e >>= k) q))
+            Guard (schedule (sys @ r := Running (trigger e >>= k) q))
         };
         (** If the agent is blocked, it could timeout or stay blocked *)
         schedule_one _ _ _ (Blocked k) :=
-          choiceI2
+          brD2
             (schedule (sys @ r := Running (k None) List.nil))  (** Timeout *)
             (schedule (sys @ r := Blocked k));                 (** Keep blocking *)
     }.
 
-  CoFixpoint schedule{E}{n: nat}(sys: Sys n (Net n +' E)): ctree E (Sys n E) :=
-    r <- choice false n ;;
+  Import CTree.
+  CoFixpoint schedule{E}{n: nat}(sys: Sys n (Net n +' E)): ctree E void :=
+    r <- br false n ;;
     schedule_one schedule sys r.
 
   Transparent schedule.
@@ -157,28 +151,23 @@ Module Network(S: Systems).
   Transparent vector_replace.
 
   Lemma unfold_schedule{E}{n: nat}(sys: Sys n (Net n +' E)) :
-    schedule sys ≅ (r <- choice false n ;; schedule_one schedule sys r).
+    schedule sys ≅ (r <- br false n ;; schedule_one schedule sys r).
   Proof.
     __step_equ; cbn; econstructor; reflexivity.
   Qed.    
 
   (** Evaluates Net *)
-  Definition run_network{E n} (s: vec n (ctree (Net n +' E) void)): ctree E (Sys n E) :=
+  Program Definition run_network{E n} (s: vec n (ctree (Net n +' E) void)): ctree E void :=
     schedule (Vector.map (fun it => Running it List.nil) s).
-
-  #[global] Instance sbisim_clos_network_goal{n E}:
-    Proper (sbisim ==> pairwise sbisim ==> sbisim)
-           (fun h ts => @run_network E (S n) (h :: ts)).
+  
+  #[global] Instance sbisim_network_goal{n E}:
+    Proper (pairwise sbisim ==> sbisim) (@run_network E n).
   Proof.
-    unfold Proper, respectful.
-    intros x y Hxy tsx tsy Hts.
-    unfold run_network; subst; cbn.
-    rewrite !unfold_schedule; cbn.
-    __upto_bind_sbisim; [reflexivity | intros; cbn].
-    dependent destruction x0; cbn.
-    - admit.
-    - unfold schedule_one.
-      cbn.
+    red.
+    cbn.
+    intros x y H.
+    unfold sbisim.
+    coinduction S CIH.
   Admitted.
 
 End Network.

@@ -9,6 +9,9 @@ From CTree Require Import
      CTree
      Interp.
 
+From ExtLib Require Import
+     Functor.
+
 (** Swaps effects *)
 Definition swapES{X Y}: X +' Y ~> Y +' X :=
   fun _ s => match s with
@@ -34,6 +37,18 @@ Definition voidL{X}: forall T, ctree X T -> ctree (void1 +' X) T :=
 Arguments voidL {X T}.
 Arguments voidR {X T}.
 
+Definition void_absorbsL{T}(t: void * T): void :=
+  match t with
+    p => match fst p with end
+  end.
+Definition void_absorbsR{T}(t: T * void): void :=
+  match t with
+    p => match snd p with end
+  end.
+
+Definition ctree_voidL{E T}(c: ctree E (void *T)): ctree E void := fmap void_absorbsL c.
+Definition ctree_voidR{E T}(c: ctree E (T * void)): ctree E void := fmap void_absorbsR c.
+  
 (** List utils *)
 Fixpoint last{A}(l: list A): option A :=
   match l with

@@ -19,17 +19,18 @@ Set Implicit Arguments.
 (** Some general Sets needed for Systems work *)
 Module Type Systems.
 
-  Parameter uid: nat -> Set.      (** Principal *)
-  Parameter bytestring: Set.      (** ByteString *)
+  Parameter uid: nat -> Set.         (** Principal *)
+  Parameter msg_type: Set.        (** Msg payload type *)
+  Parameter store_type: Set.      (** Storage type *)
   Parameter var : Set.            (** binders *)
-  Parameter channel: Type -> Set. (** Typed channels *)
-  
-  Parameter eqdec_bytestring: RelDec (@eq bytestring).
+  Parameter channel: Type -> Set.  (** Typed channels *)
+
+  Parameter eqdec_store_type: RelDec (@eq store_type).
   Parameter eqdec_var: RelDec (@eq var).
   Parameter eqdec_channel: forall T, RelDec (@eq (channel T)).
   Parameter eqdec_uid: forall t, RelDec (@eq (uid t)).
   
-  Global Existing Instance eqdec_bytestring.
+  Global Existing Instance eqdec_store_type.
   Global Existing Instance eqdec_var.
   Global Existing Instance eqdec_channel.
   Global Existing Instance eqdec_uid.
@@ -39,6 +40,7 @@ Module Type Systems.
   Parameter fin_coerce: forall t, fin t -> uid t.
   Global Coercion fin_coerce: fin >-> uid.
 End Systems.
+
 
 Module DistrSystem <: Systems.
   
@@ -59,11 +61,12 @@ Module DistrSystem <: Systems.
       rel_dec a b := @reldec_uid t a b
     }.
   
-  Definition bytestring := nat.  
-  Global Instance eqdec_bytestring: RelDec (@eq bytestring) := _.
+  Definition msg_type := nat.
+  Definition store_type := nat.
+  Global Instance eqdec_store_type: RelDec (@eq store_type) := _.
   
   Definition var : Set := string.     (** binders *)
-  Definition channel(T: Type) := nat. (** Typed channels *)
+  Definition channel(T: Type) := nat.   (** Typed channels *)
 
   Definition eqdec_var: RelDec (@eq var) := _.
   Definition eqdec_channel: forall T, RelDec (@eq (channel T)) :=
