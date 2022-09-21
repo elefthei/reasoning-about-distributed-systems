@@ -41,7 +41,7 @@ Module Log.
     | Log: S -> logE S unit.
 
     Arguments Log {S}.
-    Definition log {E} `{logE S -< E}: S -> ctree (logE S) unit := fun s => trigger (Log s).
+    Definition log {E} `{logE S -< E}: S -> ctree E unit := fun s => trigger (Log s).
     
     Definition h_state_to_log {E}: stateE S ~> stateT S (ctree (logE S +' E)) :=
       fun _ e s =>

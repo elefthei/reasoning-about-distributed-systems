@@ -42,7 +42,7 @@ Module HSimulation.
   Qed.
 End HSimulation.
 
-Module Ltl.
+Module LtlIntrinsic.
   Import DistrSystem Monad.
 
   Section Param.
@@ -101,17 +101,14 @@ Module Ltl.
       | RetF _, _ => q
       | _, RetF _ => p
       end.
+
+    Definition implt(p q: ctree LTL void): ctree LTL void :=
+      ort q (nott p).
     
     (** Weak until because `p` could be true forever *)
-    Definition weak_until(p q: ctree LTL void): ctree LTL void :=
-      CTree.forever (brS2 p q).
-    
     Definition forever(p: ctree LTL void): ctree LTL void :=
       CTree.forever p.
 
-    Definition forever'(p: ctree LTL void): ctree LTL void :=
-      weak_until p (lift (fun _ => False)).
-    
     Definition eventually(p: ctree LTL void): ctree LTL void :=
       nott (forever (nott p)).  
 
@@ -127,15 +124,16 @@ Module Ltl.
       gfp (HSimulation.sim Rapp).
       
   End Param.
-End Ltl.
+End LtlIntrinsic.
 
-Module LtlNotations.
-  Import Ltl.
+Module LtlNotationsInt.
+  Import LtlIntrinsic.
   Notation "a |= b" := (entails a b) (at level 40, left associativity).
   (** Syntax *)
   Declare Custom Entry hprop.
   Declare Scope hprop_scope.
-
+  Delimit Scope hprop_scope with hprop.
+  
   Notation "<[ A ]>" := A (at level 99, A custom hprop): hprop_scope.
   Notation "( x )" := x (in custom hprop, x at level 99) : hprop_scope.
   Notation "x" := x (in custom hprop at level 0, x constr at level 0) : hprop_scope.
@@ -148,15 +146,15 @@ Module LtlNotations.
                          (in custom hprop at level 50,
                              A custom hprop,
                              B custom hprop at level 40): hprop_scope.
+  Notation "A -> B" := (implt A B)
+                         (in custom hprop at level 50,
+                             A custom hprop,
+                             B custom hprop at level 40): hprop_scope.
+  
   Notation "'○' P" := (next P)
                         (in custom hprop at level 60,
                             P custom hprop at level 40): hprop_scope.
   
-  Notation "P 'U' Q" := (weak_until P Q)
-                              (in custom hprop at level 60,
-                                  P custom hprop,
-                                  Q custom hprop at level 40): hprop_scope.
-
   Notation "'◻' P" := (forever P)
                         (in custom hprop at level 60,
                             P custom hprop at level 40): hprop_scope.
@@ -164,37 +162,151 @@ Module LtlNotations.
   Notation "'⋄' P" := (eventually P)
                         (in custom hprop at level 60,
                             P custom hprop at level 40): hprop_scope.
-End LtlNotations.
+End LtlNotationsInt.
 
+Module LtlExtrinsic.
+   Section Param.
+    Variable (S: Type).
+
+
+    Notation LogProp := (ctree (logE S) void -> Prop).
+    Equations lift(p: S -> Prop): LogProp :=
+      lift _ a with observe a => {
+          lift _ _ (VisF (Log s) k) := p s;
+          lift _ _ _ := False;
+        }.
+
+    Inductive next(p: LogProp): LogProp :=
+      Next: forall b n k i,
+          p (k i) -> next p (Br b n k).
+
+    Inductive eventually(p: LogProp): LogProp :=
+    | ev_h: forall t, p t -> eventually p t
+    | ev_t: forall t,
+        eventually (next p) t -> eventually p t.
+
+    (** Not forever `p` *)
+    Inductive until(p q: LogProp): LogProp :=
+    | until_h: forall t, q t -> until p q t
+    | until_t: forall t, p t ->
+                    next (until p q) t ->
+                    until p q t.
+
+    (** Also called `unless` *)
+    CoInductive weak_until(p q: LogProp): LogProp :=
+    | weak_until_h: forall t, q t -> weak_until p q t
+    | weak_until_t: forall t, p t ->
+                         next (weak_until p q) t ->
+                         weak_until p q t.
+    
+    CoInductive forever(p: LogProp): LogProp :=
+      C_forever:
+        forall t, p t ->
+             next (forever p) t ->
+             forever p t.
+
+    Definition andt(p q: LogProp): LogProp :=
+      fun t => p t /\ q t.
+
+    Definition ort(p q: LogProp): LogProp :=
+      fun t => p t \/ q t.
+
+    Definition nott(p: LogProp): LogProp :=
+      fun t => not (p t).
+
+    Definition implt(p q: LogProp): LogProp :=
+      fun t => p t -> q t.
+
+    Definition entails(t: ctree (logE S) void)
+               (p: LogProp): Prop := p t.
+
+    End Param.
+End LtlExtrinsic.
+
+Module LtlNotationsExt.
+  Import LtlExtrinsic.
+  
+  Notation "a |= b" := (entails a b) (at level 40, left associativity).
+  (** Syntax *)
+  Declare Custom Entry hprop_ext.
+  Declare Scope hprop_ext_scope.
+  Delimit Scope hprop_ext_scope with hprop_ext.
+  
+  Notation "<[ A ]>" := A (at level 99, A custom hprop_ext): hprop_ext_scope.
+  Notation "( x )" := x (in custom hprop_ext, x at level 99) : hprop_ext_scope.
+  Notation "x" := x (in custom hprop_ext at level 0, x constr at level 0) : hprop_ext_scope.
+
+  Notation "A /\ B" := (andt A B)
+                         (in custom hprop_ext at level 50,
+                             A custom hprop_ext,
+                             B custom hprop_ext at level 40): hprop_ext_scope.
+  Notation "A \/ B" := (ort A B)
+                         (in custom hprop_ext at level 50,
+                             A custom hprop_ext,
+                             B custom hprop_ext at level 40): hprop_ext_scope.
+  Notation "A -> B" := (implt A B)
+                         (in custom hprop_ext at level 50,
+                             A custom hprop_ext,
+                             B custom hprop_ext at level 40): hprop_ext_scope.
+  
+  Notation "'○' P" := (next P)
+                        (in custom hprop_ext at level 60,
+                            P custom hprop_ext at level 40): hprop_ext_scope.
+  
+  Notation "P 'U' Q" := (until P Q)
+                              (in custom hprop_ext at level 60,
+                                  P custom hprop_ext,
+                                  Q custom hprop_ext at level 40): hprop_ext_scope.
+
+  Notation "P 'W' Q" := (weak_until P Q)
+                          (in custom hprop_ext at level 60,
+                                  P custom hprop_ext,
+                                  Q custom hprop_ext at level 40): hprop_ext_scope.
+
+
+  Notation "'◻' P" := (forever P)
+                        (in custom hprop_ext at level 60,
+                            P custom hprop_ext at level 40): hprop_ext_scope.
+
+  Notation "'⋄' P" := (eventually P)
+                        (in custom hprop_ext at level 60,
+                            P custom hprop_ext at level 40): hprop_ext_scope.
+End LtlNotationsExt.
+
+(***********************************)
 (** Some scratch work and examples *)
-Import Ltl LtlNotations.
-Open Scope hprop_scope.
-
+(***********************************)
 From DSL Require Import Utils.
-Open Scope hprop_scope.
-
-(** They should be the same *)
-Lemma forever_forever': forall (S: Type) (p: ctree (LTL S) void),
-    <[ ◻ p ]> ~ forever' p.
-Proof.  
-  intros.
-  unfold sbisim.
-  coinduction ? ?.
-  unfold forever, forever', weak_until.
-  rewrite Shallow.unfold_forever_.
-Admitted.
 
 (** Print an infinite sequence [1,1,1...] *)
-Example foo : ctree (logE nat) unit :=
+Example foo : ctree (logE nat) void :=
   CTree.forever (log 1).
 
-Lemma foo_positive:
-  let positive := lift (fun s => s > 0) in  
-  foo |= <[ ⋄ positive ]>.
-Proof.
-  simpl.
-  unfold entails.
-  coinduction ? ?.
-  (* Should reason equationally about LTL spec refinement *)
-Admitted.
+Module A.
+  Import LtlIntrinsic LtlNotationsInt.
+  Local Open Scope hprop_scope.
+
+  Lemma foo_positive:
+    let positive := lift (fun s => s > 0) in  
+    foo |= <[ ⋄ positive ]>%hprop.
+  Proof.
+    simpl.
+    unfold entails.
+    coinduction ? ?.
+    (* Should reason equationally about LTL spec refinement *)
+  Admitted.
+End A.
+
+Module B.
+  Import LtlExtrinsic LtlNotationsExt.
+  Local Open Scope hprop_ext_scope.
+  Lemma foo_positive':
+    let positive := lift (fun s => s > 0) in  
+    foo |= <[ ⋄ positive ]>%hprop_ext.
+  Proof.
+    simpl.
+    unfold entails.
+    (* Should reason inductively/coinductively *)
+  Admitted.
+End B.
 

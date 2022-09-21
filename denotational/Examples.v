@@ -39,6 +39,10 @@ From DSL Require Import
      Utils
      Vectors.
 
+
+Import Coq.Lists.List.ListNotations.
+Open Scope fin_vector_scope.
+  
 Import CTreeNotations Log.
 Local Open Scope ctree_scope.
 Local Open Scope string_scope.
@@ -162,16 +166,12 @@ Module Baker.
   Import Monads Network Storage BakerSystem.
 
   (** ===================================================================== *)
-  (** First system, experiment -- two agents sending messages to each other *)
-  Program Definition bakery_uid : uid 4 := @of_nat_lt 0 _ _.
+  (** Lamport's bakery algorithm *)
+  Program Definition bakery_uid : uid 3 := @of_nat_lt 0 _ _.
   Definition to_nat{n}(f: fin n):= proj1_sig (to_nat f).
 
-  (** Do nothing, scheduler will act as a bakery *)
-  Definition bakery: ctree (stateE store_type +' Net 4) void :=
-    CTree.spinD.
-
   (** Client participates in the bakery algorithm *)
-  Definition client: ctree (stateE store_type +' Net 4) void :=
+  Definition client: ctree (Net _ +' stateE store_type) void :=
     daemon (
         (* choosing[i] := 1 *)
         p <- get;;
@@ -192,29 +192,25 @@ Module Baker.
                       | _ => ret (inl tt)
                       end) tt).
 
-  Import Coq.Lists.List.ListNotations.
-  Local Open Scope fin_vector_scope.
+  Notation Sys n := (vec n (ctree (Net n +' stateE store_type) void * store_type * list (Msg n))).
   
-  Notation Sys n E := (vec n (ctree E void * list (Msg n))).
-  
-  Equations schedule_one{E: Type -> Type}{n: nat}(max: nat)
-            (schedule: nat -> Sys n (Net n +' E) -> ctree E void)
-            (sys: Sys n (Net n +' E)) (r: fin n): ctree E void :=
+  Equations schedule_one{n: nat}(max: nat)
+            (schedule: nat -> Sys n -> ctree void1 void)(sys: Sys n) (r: fin n): ctree void1 void :=
     schedule_one _ schedule sys r with sys $ r => {
-        schedule_one _ _ _ _ (a, q) with observe a => {
+        schedule_one _ _ _ _ (a, s, q) with observe a => {
           (* Commute branches *)
           schedule_one _ _ _ _ _ (BrF b n' k) :=
-            Br b n' (fun i' => schedule max (sys @ r := (k i', q)));
+            Br b n' (fun i' => schedule max (sys @ r := (k i', s, q)));
            
          (* A network `send` effect, interpet it! *)
          schedule_one _ _ _ _ _ (VisF (inl1 (Send (Build_Msg uid GetNumber))) k) :=
            (* All messages are to the bakery, have the scheduler send the new number in reply *)
            let msg := {| principal := uid; payload := SetNumber max |} in
-           Guard (schedule (S max) (sys @ r := (k tt, (msg :: q)%list)));
+           Guard (schedule (S max) (sys @ r := (k tt, s, (msg :: q)%list)));
 
          (* A network `send` that is not GetNumber does nothing. *)
          schedule_one _ _ _ _ _ (VisF (inl1 (Send (Build_Msg _ _))) k) :=
-           Guard (schedule max (sys @ r := (k tt, q)));
+           Guard (schedule max (sys @ r := (k tt, s, q)));
                
          (* Receive a message *)
          schedule_one _ _ _ _ _ (VisF (inl1 Recv) k) :=
@@ -222,24 +218,31 @@ Module Baker.
            match last q with
            | Some msg =>
                (** Pop the msg from the end *)
-               Guard (schedule max (sys @ r := (k (Some msg), init q)))
-            | None =>
-                (** Becomes blocked if no messages in q *)
-                Guard (schedule max (sys @ r := (Vis (inl1 Recv) k, q)))
+               Guard (schedule max (sys @ r := (k (Some msg), s, init q)))
+           | None =>
+               (** If I have the max number and not choosing, schedule CS! *)
+               if andb (negb (choosing s)) (Nat.eqb (number s) max) then
+                 Guard (schedule max (sys @ r := (k (Some {| principal := r; payload := CS |}), s, init q)))
+               else
+                 (** Becomes blocked if no messages in q *)
+                 Guard (schedule max (sys @ r := (Vis (inl1 Recv) k, s, q)))
             end;
 
           (* Broadcast a message to everyone not used, skip *)
           schedule_one _ _ _ _ _ (VisF (inl1 (Broadcast b)) k) :=
-            Guard (schedule max (sys @ r := (k tt, q)));
+            Guard (schedule max (sys @ r := (k tt, s, q)));
           
-          (* Some other downstream effect, trigger *)
-          schedule_one _ _ _ _ _ (VisF (inr1 e) k) :=
-            Guard (schedule max (sys @ r := (trigger e >>= k, q)));
+          (* Some state effect, interpret those too *)
+          schedule_one _ _ _ _ _ (VisF (inr1 (Get _)) k) :=
+          Guard (schedule max (sys @ r := (k s, s, q)));
+          
+          schedule_one _ _ _ _ _ (VisF (inr1 (Put _ s)) k) :=
+          Guard (schedule max (sys @ r := (k tt, s, q)));
         }
       }.
-
+    
     Import CTree.
-    CoFixpoint schedule{E}{n: nat}(max: nat)(sys: Sys n (Net n +' E)): ctree E void :=
+    CoFixpoint schedule{n: nat}(max: nat)(sys: Sys n): ctree void1 void :=
       r <- br false n ;;
       schedule_one max schedule sys r.
 
@@ -247,7 +250,7 @@ Module Baker.
     Transparent schedule_one.
     Transparent vector_replace.
 
-    Lemma unfold_schedule{E}{n: nat}(max: nat)(sys: Sys n (Net n +' E)) :
+    Lemma unfold_schedule{n: nat}(max: nat)(sys: Sys n ):
       schedule max sys ≅ (r <- br false n ;; schedule_one max schedule sys r).
     Proof.
       __step_equ; cbn; econstructor.
@@ -257,15 +260,10 @@ Module Baker.
       reflexivity.
     Qed.    
 
-  (** Evaluates Net *)
-  Program Definition run_network{E n} (s: vec n (ctree (Net n +' E) void)): ctree E void :=
-    schedule 0 (Vector.map (fun it => (it, []%list)) s).
+    (** ================================================================================ *)
+    (** This is the top-level denotation of a distributed system to a ctree of behaviors *)
+    Definition run{n} (s: vec n (ctree (Net n +' stateE store_type) void)): ctree void1 void :=
+      schedule 0 (Vector.map (fun it => (it, {| choosing := false; number := 0 |}, []%list)) s).
 
-  (** ================================================================================ *)
-  (** This is the top-level denotation of a distributed system to a ctree of behaviors *)
-  Program Definition run{n}(v: vec n (ctree (stateE store_type +' Net n) void)):
-    store_type -> ctree (logE store_type) void :=
-    fun st => run_network (Vector.map swap (run_states_log v st)).
-  
-  Compute run [bakery; client; client; client] {| choosing := false; number := 0 |}.
+    Compute run [client; client; client].
 End Baker.
