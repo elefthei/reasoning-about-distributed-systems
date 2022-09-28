@@ -8,8 +8,8 @@ From Coq Require Import
      Fin
      Lia
      Vector
-     String
      Logic.Eqdep
+     Classes.RelationClasses
      Program.Tactics.
 
 From Equations Require Import Equations.
@@ -181,10 +181,16 @@ Module Baker.
       schedule 0 (Vector.map (fun it => (it, {| choosing := false; number := 0 |}, []%list)) s).
 
     (************************* Logical predicates on systems ************************)
+    (* predicate *)
+
+    Notation CProp' S := (ctree' (logE S) void -> Prop).
+    Notation CProp S := (ctree (logE S) void -> Prop).
+
     Section PredParam.
       Context {S: Type}.
       Variable (p: S -> Prop). (* predicate *)
-      Inductive lift': ctree' (logE S) void -> Prop :=
+
+      Inductive lift': CProp' S :=
       | Lift_Vis k s:
         p s ->
         lift' (VisF (Log s) k)
@@ -192,27 +198,39 @@ Module Baker.
         (forall i, lift' (observe (k i))) ->
         lift' (BrF b n k).
 
-      Definition lift : ctree (logE S) void -> Prop :=
+      Definition lift : CProp S :=
 	fun t => lift' (observe t).
-      
+
+      Definition cimpl: CProp S -> CProp S -> CProp S :=
+        fun a b t => a t -> b t.
+
+      Definition cand: CProp S -> CProp S -> CProp S :=
+        fun a b t => a t /\ b t.
+
+      Definition cor: CProp S -> CProp S -> CProp S :=
+        fun a b t => a t \/ b t.
+
+      Definition cnot: CProp S -> CProp S :=
+        fun a t => not (a t).
+
     End PredParam.
 
     Section ModalParam.
       Context {S: Type}.
-      Variable (P: ctree (logE S) void -> Prop).
+      Variable (P: CProp S). 
 
-      Inductive next': ctree' (logE S) void -> Prop :=
+      Inductive next': CProp' S :=
       | Next_Vis k s:
         P (k tt) ->
         next' (VisF (Log s) k)
       | Next_Br b {n} (k : fin n -> _):
         (forall i, next' (observe (k i))) ->
         next' (BrF b n k).
-
-      Definition next : ctree (logE S) void -> Prop :=
+      
+      Definition next : CProp S :=
 	fun t => next' (observe t).
       
-      Inductive eventually': ctree' (logE S) void -> Prop :=
+      Inductive eventually': CProp' S :=
       | Ev_VisTrue k s:
         P (Vis (Log s) k) ->
         eventually' (VisF (Log s) k)
@@ -224,11 +242,11 @@ Module Baker.
         eventually' (BrF b n k).
       Hint Constructors eventually': core.
 
-      Definition eventually : ctree (logE S) void -> Prop :=
+      Definition eventually : CProp S :=
         fun t => eventually' (observe t).
 
       (** Coinductive *)
-      Variant always' (R: ctree (logE S) void -> Prop): ctree' (logE S) void -> Prop :=
+      Variant always' (R: CProp S): CProp' S :=
         | Always_Vis k s:
           P (Vis (Log s) k) ->
           R (k tt) ->
@@ -239,22 +257,22 @@ Module Baker.
 
       Hint Constructors always': core.
       
-      Definition always_ R : ctree (logE S) void -> Prop :=
+      Definition always_ R : CProp S :=
 	fun t => always' R (observe t).
 
-      Program Definition falways: mon (ctree (logE S) void -> Prop) := {|body := always_|}.
+      Program Definition falways: mon (CProp S) := {|body := always_|}.
       Next Obligation.
-        unfold always_.
-        inversion_clear H0; auto.
+        unfold always_; inversion_clear H0; auto.
       Qed.
 
       Definition always := (gfp (@falways)).
+
     End ModalParam.
 
-    Definition infinitely_often{S}(P: ctree (logE S) void -> Prop): ctree (logE S) void -> Prop :=
+    Definition infinitely_often{S}(P: CProp S): CProp S :=
       fun t => always ((eventually P)) t.
 
-    #[global] Hint Unfold lift next eventually always infinitely_often: core.
+    #[global] Hint Unfold lift next eventually always always_ infinitely_often: core.
     #[global] Hint Constructors lift' next' eventually' always':  core.
     Arguments lift _ /.
     Arguments next _ /.
@@ -263,59 +281,133 @@ Module Baker.
     Arguments infinitely_often _ /.
 
     (**** Proper instances *)
-    #[local] Instance proper_lift_equ: forall S (p: S -> Prop),
-        Proper (equ eq ==> impl) (lift p).
+    #[global] Instance proper_lift_equ: forall S (p: S -> Prop),
+        Proper (equ eq ==> iff) (lift p).
     Proof.
       unfold Proper, respectful, impl; cbn.      
-      intros S p x y EQ LIFT.
-      remember (observe x) as x'.
-      remember (observe y) as y'.
-      generalize dependent x.
-      generalize dependent y.
-      
-      dependent induction LIFT; intros y Hy x EQ; destruct y'; intro Hx;
+      intros S p x y EQ.
+      split; intro LIFT;
+        remember (observe x) as x';
+        remember (observe y) as y';
+        generalize dependent x;
+        generalize dependent y.
+      (* -> *)
+      - dependent induction LIFT;
+          intros y Hy x EQ; destruct y'; intro Hx;
         try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
-      - destruct e; dependent destruction EQ; eauto.
-      - inversion EQ.
-      - inversion EQ.
-      - dependent destruction EQ; eauto.
+        + destruct e; dependent destruction EQ; eauto.
+        + inversion EQ.
+        + inversion EQ.
+        + dependent destruction EQ; eauto.
+      (* <- *)
+      - dependent induction LIFT;
+          intros y Hy x EQ; destruct x'; intro Hx;
+          try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
+        + destruct e; dependent destruction EQ; eauto.
+        + inversion EQ.
+        + inversion EQ.
+        + dependent destruction EQ; eauto.
     Qed.
 
-    #[local] Instance proper_next_equ: forall S (P: ctree (logE S) void -> Prop),
-        Proper (equ eq ==> flip impl) (next P).
-    Proof.
-    Admitted.
-  
-    #[local] Instance proper_eventually_equ: forall S (P: ctree (logE S) void -> Prop),
-        Proper (equ eq ==> flip impl) (eventually P).
-    Proof.
-      unfold Proper, respectful, flip, impl; cbn.
-      intros S P x y EQ.
-      step in EQ.
-      dependent destruction EQ; induction 1; try contradiction; try destruct e.
-      - inv x; apply inj_pair2 in H2; subst.
-        rewrite <- x1; auto.
-        apply Ev_VisTrue.
-        (* FuncExt with equ? *)
-    Admitted.
+    Section ModalParam.
+      Check pointwise_relation.
+      Context {S: Type} {P: CProp S}
+              {PrH: Proper (equ eq ==> impl) P}.
 
-    #[local] Instance proper_always_equ: forall S (P: ctree (logE S) void -> Prop),
-        Proper (equ eq ==> flip impl) (always P).
-    Proof.
-    Admitted.
-    
-    #[local] Instance proper_infinitely_often_equ: forall S (P: ctree (logE S) void -> Prop),
-        Proper (equ eq ==> flip impl) (infinitely_often P).
-    Proof.
-      unfold Proper, respectful, flip, impl; cbn.
-      intros S P; coinduction ? IH; intros x y EQ Inf.
-      step in Inf.
-      step in EQ.
-      inv Inf; rewrite <- H in EQ.
-      - inv EQ.
-        destruct e0, e.
-        apply inj_pair2 in H5, H6; inv H5.
-    Admitted.
+      #[local] Instance proper_next_equ: Proper (equ eq ==> iff) (next P).
+      Proof.
+        unfold Proper, respectful, impl; cbn.      
+        intros x y EQ.
+        split; intro NEXT;
+          remember (observe x) as x';
+          remember (observe y) as y';
+          generalize dependent x;
+          generalize dependent y.
+        (* -> *)
+        - dependent induction NEXT; intros y Hy x EQ; destruct y'; intro Hx;
+            try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
+          2,3: inversion EQ.
+          + destruct e; dependent destruction EQ; rewrite (REL tt) in H; auto.
+          + dependent destruction EQ; eauto.
+        (* <- *)
+        - dependent induction NEXT; intros y Hy x EQ; destruct x'; intro Hx;
+            try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
+          2,3:inversion EQ.
+          + destruct e; dependent destruction EQ; rewrite <- (REL tt) in H; auto.
+          + dependent destruction EQ; eauto.
+      Qed.
+  
+      #[local] Instance proper_eventually_equ: Proper (equ eq ==> iff) (eventually P).
+      Proof.
+        unfold Proper, respectful, impl; cbn.      
+        intros x y EQ. 
+        split; intro EVENTUALLY; remember (observe x) as x';
+          remember (observe y) as y';
+          generalize dependent x;
+          generalize dependent y.
+        (* -> *)
+        - dependent induction EVENTUALLY; intros y Hy x EQ; destruct y'; intro Hx;
+            try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
+          + destruct e; dependent destruction EQ; econstructor; eapply PrH.
+            2: apply H.
+            1: step; eauto.
+          + inversion EQ.
+          + destruct e; dependent destruction EQ;
+              eapply Ev_VisFalse; eapply IHEVENTUALLY; eauto.
+          + inversion EQ.
+          + inversion EQ.
+          + dependent destruction EQ; eauto.
+        (* <- *)
+        - dependent induction EVENTUALLY; intros y Hy x EQ; destruct x'; intro Hx;
+            try contradiction; step in EQ; rewrite <- Hy in EQ; rewrite <- Hx in EQ.
+          + destruct e; dependent destruction EQ; econstructor; eapply PrH.
+            2: apply H.
+            1: symmetry in REL; step; eauto. 
+          + inversion EQ.
+          + destruct e; dependent destruction EQ;
+              eapply Ev_VisFalse;
+              eapply IHEVENTUALLY; eauto.
+          + inversion EQ.
+          + inversion EQ.
+          + dependent destruction EQ; eauto.
+      Qed.
+
+      #[local] Instance proper_always_equ:
+          Proper (equ eq ==> impl) (always P).
+      Proof.
+        unfold Proper, respectful, impl, always.
+        coinduction ? CIH.                
+        intros x y EQ ALWAYS.
+        step in EQ; inv EQ; try contradiction; subst.
+        (* Vis *)
+        - destruct e;
+            unfold bt; cbn; unfold always_; cbn*; rewrite <- H.
+          eapply Always_Vis.
+          eapply (@PrH (Vis (Log s) k1)); auto.
+          + step; eauto. 
+          + step in ALWAYS; inv ALWAYS; rewrite <- H0 in H1;
+              inv H1; apply inj_pair2 in H6; subst; eauto.
+          + eapply CIH; eauto.
+            step in ALWAYS; inv ALWAYS; rewrite <- H0 in H1;
+              inv H1; apply inj_pair2 in H6; subst; eauto.
+        (* Br *)
+        - unfold bt; cbn; unfold always_; cbn*; rewrite <- H.
+          eapply Always_Br.
+          intro i.
+          eapply CIH; eauto.
+          step in ALWAYS; inv ALWAYS; rewrite <- H0 in H1;
+            inv H1; apply inj_pair2 in H6; subst; eauto.
+      Qed.          
+
+      #[local] Instance proper_infinitely_often_equ:
+          Proper (equ eq ==> iff) (infinitely_often P).
+      Proof.
+        solve_proper.
+        unfold infinitely_often.
+        epose proof (proper_always_equ).
+        apply 
+      Admitted.
+    End ModalParam.
     
     Section N.
       Variable (n: nat).
@@ -345,10 +437,6 @@ Module Baker.
                           | _ => ret (inl tt)
                           end) tt).
         
-      (** Definition of fairness *)
-      Definition fair(sched: ctree Success void): Prop :=
-        forall (id: fin n), infinitely_often (lift (fun a => a = Start id)) sched.
-   
     End N.
 
     Program Definition A : uid 2 := @of_nat_lt 0 _ _.
@@ -356,11 +444,17 @@ Module Baker.
     
     Lemma liveness: forall id,
         let sys := run [client A; client B] in
-        fair sys -> eventually (lift (fun a => a = Done id)) sys.
+        infinitely_often (lift (fun a => a = Start id)) sys -> (* fairness *)
+        eventually (lift (fun a => a = Done id)) sys.
     Proof.
+      unfold run.
       intros.
-      subst sys.
-      
+      rewrite unfold_schedule.
+      step in H.
+
+
+      inv H.
+      cbn*.
       unfold run, client; intros.
       rewrite unfold_schedule.
       cbn; econstructor.
